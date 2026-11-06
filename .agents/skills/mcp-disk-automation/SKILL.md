@@ -1,25 +1,40 @@
 ---
 name: mcp-disk-automation
-description: Chuyên gia tự động hóa quy trình điều tra đĩa, điều phối tác vụ nền bất đồng bộ (Async Job Orchestration) và tối ưu hóa tài nguyên RAM Overlay.
+description: Điều phối MCP recovery theo schema thật: async state, scan coverage, cancellation, hit pagination, WAL/quotas và báo partial/unsupported mà không giả lập thành công.
+metadata:
+  version: "3.0"
 ---
 
-> Implementation boundary: follow ../recovery-triage/SKILL.md and the live
-> tools/list schema first. Historical playbooks below contain unsupported
-> scenarios. General deleted-record/journal scanning, exFAT/EXT4 recovery and legacy
-> external recovery adapters return NotImplemented. Fragment scores are
-> heuristics, not proof of a match. Native cloning is not GNU ddrescue.
-> All LBAs use session sector_size; never write repairs to original media.
+# Điều phối tác vụ và lưu bằng chứng
 
-# Kỹ Năng Tự Động Hóa Tác Vụ Đĩa & Điều Phối Bất Đồng Bộ (MCP Disk Automation)
+Đọc [triage](../recovery-triage/SKILL.md), capabilities và `tools/list`. Case
+device/reader phải được phân loại trước khi gọi job. Không mở session 0 byte rồi
+tự tăng timeout/retry để giả có addressable media.
 
-Trong quá trình điều tra số trên các ổ đĩa dung lượng lớn (hàng trăm Gigabytes đến Terabytes), các tác vụ như quét chữ ký nhị phân toàn đĩa (`SIMD_MAGIC_CARVE`) hay nhân bản phân vùng hỏng (`DD_RESCUE_CLONE`) mất từ vài phút đến nhiều giờ.
+- Chỉ truyền tham số có trong schema. Không dùng `target_extensions`,
+  `target_patterns`, `retry_passes` cho native clone hoặc `scan_step_sectors`.
+  External CLI và MCP có capability khác nhau.
+- Mỗi lần chạy ghi source/session ID, sector size, overlay revision, job type,
+  range [start_lba,end_lba), tool version, start/end và terminal state.
+- `extract_recovered_data` trả DATA_EXTRACTION job. `start_async_disk_job` có các
+  loại scan/native clone theo live schema. Không đợi file xuất đồng bộ trong reply.
+- Poll vừa đủ để theo dõi, không busy-loop hoặc thông báo hoàn tất khi mới start.
+  Hình trạng thái thật: `{"Running":{...}}`, `{"Completed":{"result":...}}`,
+  `{"Failed":{"error":...}}` hoặc chuỗi `"Cancelled"`.
+- Cancel: `poll_async_job(job_id, cancel=true)`, chờ terminal acknowledgement.
+  Commit thành công chạy đua cancel có thể vẫn Completed với output.
+- Trang đầu không đại diện mọi hit. `read_scan_hits` lấy `next_cursor` trả về,
+  limit 1..100; response có thể ít hàng hơn do budget 5 KB.
+- Không suy coverage từ tiến độ 100% nếu Failed/cancel/partial clone. Giữ unknown
+  ranges, hit JSONL và [evidence report](../recovery-triage/references/report-and-handoff.md).
+- At most 4 running jobs, 32 sessions/process; hit files chiếm đĩa và không tự có
+  quota. Native tree: 10,000 files, 8 GiB, depth 64. Xem capabilities cho giới hạn
+  WAL/patch; không bịa `overlay_memory_used_kb` hay tự clear/reopen để mất patch.
+- Giữ `RESC_SESSION_ROOT`, source binding, WAL, output/map/manifest và commit
+  recovery paths. Reopen image không resume live jobs; phải kiểm state cũ trước.
+- Job đổi overlay revision có thể fail. Không chạy scan/patch mâu thuẫn đồng thời;
+  poll/cancel dùng registry độc lập với overlay.
+- Tool NotImplemented, timeout, missing dependency hay skip không phải recovery.
+  Nếu zero-hit đọc [nhánh zero-hit](../recovery-triage/references/acquisition-and-formats.md#zero-hit).
 
-Kỹ năng này hướng dẫn AI Agent cách:
-1. **Khởi tạo và Điều phối Bất Đồng Bộ (Non-Blocking Orchestration):** Sử dụng cặp công cụ `start_async_disk_job` và `poll_async_job` mà không làm nghẽn hoặc tiêu hao vô ích Token của Context Window.
-2. **Kiểm Soát Giới Hạn Bộ Nhớ Đệm RAM (Overlay Budget Management):** Giữ cho `VirtualDiskOverlay` luôn nằm trong hạn mức an toàn (< 512MB RAM), tự động xả hoặc tái sử dụng vùng đệm khi cần thiết.
-3. **Phản Hồi Trạng Thái Thời Gian Thực Cho Người Dùng:** Trình bày tiến độ (`progress_percent`), tốc độ xử lý (`sectors_processed/s`) và số lượng mục phát hiện được (`items_found`) một cách ngắn gọn, súc tích.
-
----
-
-## Danh Mục Playbooks
-- [01_async_job_orchestration.md](playbooks/01_async_job_orchestration.md): Chiến lược thăm dò tiến độ không chặn, quản lý vòng đời tác vụ nền và ngắt kết nối an toàn.
+[Playbook trạng thái/cursor](playbooks/01_async_job_orchestration.md) có ví dụ API.

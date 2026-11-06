@@ -1,48 +1,25 @@
-# Playbook 02: Khôi phục Phân Vùng NTFS bị lỗi RAW (NTFS Raw Repair)
+# NTFS RAW: xác minh boot trước, không hứa MFT undelete
 
-## 1. Dấu hiệu nhận biết
-- Ổ đĩa hiển thị phân vùng NTFS là `RAW` trong Windows Explorer hoặc Disk Management.
-- Hệ điều hành thông báo: *"The volume does not contain a recognized file system."* hoặc *"The parameter is incorrect."*
-- LBA 2048 (hoặc Start LBA) bị hỏng (corrupted OEM ID hoặc signature `0x55AA` bị mất).
+RAW có thể do metadata, sai offset, encryption hoặc nguồn đọc sai. Hoàn tất
+[reader/triage](../../recovery-triage/SKILL.md) trước khi vá.
 
-## 2. Cấu trúc NTFS Boot Sector (VBR - Volume Boot Record)
-- Offset 0x03..0x0A: Chữ ký `NTFS    ` (8 bytes)
-- Offset 0x0B..0x0C: Bytes per sector (thường là 512 hoặc 4096)
-- Offset 0x0D: Sectors per cluster (1, 2, 4, 8... thường là 8 -> 4096 bytes/cluster)
-- Offset 0x28..0x2F: Total Sectors (kích thước phân vùng tính theo sector)
-- Offset 0x30..0x37: Logical Cluster Number của `$MFT`
-- Offset 0x38..0x3F: Logical Cluster Number của `$MFTMirr`
-- Offset 0x1FE..0x1FF: End of Sector Marker (`0x55AA`)
+1. Lấy partition boundary từ topology hoặc bằng chứng độc lập. Không mặc định
+   mọi volume bắt đầu LBA 2048; ảnh partition có thể bắt đầu 0.
+2. Gọi `analyze_partition_recovery` với `partition_start_lba`; đối chiếu NTFS
+   primary/backup, bytes per sector 512/4096, cluster/record geometry, MFT locations
+   và identity. Header signature hợp lệ không chứng minh toàn volume tốt.
+3. Backup ở partition end được xác minh; trường BPB total-sectors có thể không
+   gồm backup. Không thử cả hai công thức tùy tiện khi chưa biết boundary.
+4. Nếu proposal phù hợp, dùng `virtual_patch_and_verify` với
+   `copy_from_lba`, `to_lba`, `partition_start_lba` và session ID.
+5. SUCCESS chỉ root traversal + file entry; xuất allocated files bằng native
+   `TSK_TREE_EXTRACT`, kiểm hash/manifest/format. Quotas và unsupported attributes
+   vẫn có thể khiến extraction partial/fail.
+6. MFT damage nặng/deleted/attribute lists cần engine chuyên biệt. Không tự sao
+   chép "đúng bốn records 1024 byte" từ MFTMirr: số lượng/record size và fixups
+   phải theo geometry. Chưa có automatic MFTMirr reconstruction trong resc.
+7. `scan_filesystem_journals` là NotImplemented; không dùng để verify một patch
+   hoặc kết luận deleted MFT/USN đã phục hồi.
 
-## 3. Quy trình khắc phục bằng Virtual Overlay
-
-### Bước 1: Kiểm tra tính toàn vẹn của Primary VBR
-1. Gọi `inspect_sector_structure(session_id, lba=start_lba, parse_as="NTFS_VBR")`.
-2. Kiểm tra các trường:
-   - `oem_id` có đúng `"NTFS    "` không?
-   - `bytes_per_sector` có nằm trong {512, 1024, 2048, 4096} không?
-   - `end_of_sector_marker` có phải `0xAA55` không?
-   - Nếu bất kỳ trường nào sai, Primary VBR đã bị hỏng.
-
-### Bước 2: Tìm kiếm Backup VBR
-NTFS luôn tự động ghi một bản sao của VBR ở **sector cuối cùng của phân vùng**:
-- `Backup_VBR_LBA = Start_LBA + Total_Sectors` (hoặc `Start_LBA + Total_Sectors - 1`).
-- Gọi `inspect_sector_structure(session_id, lba=backup_vbr_lba, parse_as="NTFS_VBR")`.
-- Nếu Backup VBR hợp lệ (OEM ID `"NTFS    "` và marker `0x55AA` đầy đủ), ta tiến hành vá.
-
-### Bước 3: Áp dụng bản vá ảo (Virtual Copy-on-Write Patch)
-Sao chép sector từ Backup VBR đè lên Primary VBR trên RAM:
-```json
-virtual_patch_and_verify(
-  session_id="...",
-  copy_from_lba=backup_vbr_lba,
-  to_lba=primary_vbr_lba
-)
-```
-Nếu `mount_status` trả về `"SUCCESS"`, cấu trúc NTFS đã có thể đọc được.
-
-### Bước 4: Kiểm tra và phục hồi MFT Record 0..3 từ $MFTMirr
-Nếu VBR tốt nhưng file system vẫn không mount được:
-1. Đọc trường `mft_lcn` từ VBR. Tính `MFT_Start_LBA = Start_LBA + (mft_lcn * sectors_per_cluster)`.
-2. Kiểm tra 1024 bytes đầu tiên của `$MFT` qua `inspect_sector_structure(lba=MFT_Start_LBA, parse_as="MFT_ENTRY")`.
-3. Nếu 4 record đầu tiên bị hỏng (Record 0: `$MFT`, Record 1: `$MFTMirr`, Record 2: `$LogFile`, Record 3: `$Volume`), đọc `mft_mirr_lcn` để sao chép 4 record dự phòng từ `$MFTMirr` đè lên `$MFT` trên RAM Overlay.
+Nếu payload không tồn tại trong view hoặc sau reconnect mất, boot repair không
+tạo lại dữ liệu; đi [reader controls](../../recovery-triage/references/reader-controls.md).

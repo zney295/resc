@@ -1,35 +1,35 @@
-# Playbook: Chiến Lược Thăm Dò Tiến Độ & Quản Lý Tác Vụ Nền Bất Đồng Bộ
+# Async job, terminal state và cursor thật
 
-## 1. Thiết Kế Bất Đồng Bộ Của Engine
-Tất cả các tác vụ nặng được Rust Native Engine đẩy vào `tokio` thread pool nền để đảm bảo luồng JSON-RPC stdio luôn sẵn sàng đáp ứng lệnh mới (< 5ms).
+Gọi tools/list; dùng job_id từ start_async_disk_job hoặc extract_recovered_data.
+Không bịa schedule tool hay kết quả results[] chưa trả về.
 
-```
-[ AI Agent ]  -- start_async_disk_job --> [ MCP Server ] --> Spawn Worker Thread
-[ AI Agent ]  <-- { job_id, status: RUNNING }
-       |
-       | (Periodic interval / Reactive wake-up)
-       v
-[ AI Agent ]  -- poll_async_job(job_id) --> [ MCP Server ]
-[ AI Agent ]  <-- { progress_percent, items_found, status }
+Ví dụ đối tượng tools/call:
+
+```json
+{"name":"poll_async_job","arguments":{"job_id":"ID_FROM_START"}}
+{"name":"read_scan_hits","arguments":{"session_id":"ID_FROM_OPEN","job_id":"ID_FROM_START","cursor":0,"limit":20}}
 ```
 
----
+Các hình dạng status JSON (nằm trong report của tool):
 
-## 2. Quy Tắc Tiết Kiệm Token Context Window (Anti-Token Bloat)
-> **QUY TẮC VÀNG:** Tuyệt đối KHÔNG gọi `poll_async_job` trong vòng lặp liên tục (busy-wait) trong cùng một lượt phản hồi. Việc gọi liên tục sẽ gây tràn token context window và tốn chi phí API không cần thiết.
+```json
+{"Running":{"progress_percent":25.0,"message":"...","sectors_processed":100,"items_found":2,"bytes_written":0}}
+{"Completed":{"result":{}}}
+{"Failed":{"error":"..."}}
+"Cancelled"
+```
 
-### Chu Trình Khuyến Nghị Cho AI:
-1. Gọi `start_async_disk_job`.
-2. Kiểm tra `estimated_sectors` và `job_type`.
-3. Báo cáo ngắn gọn cho người dùng:
-   *"Tác vụ quét chữ ký nhị phân đã được khởi động ở chế độ nền (Job ID: `...`). Đang tiếp tục theo dõi tiến độ..."*
-4. Gọi `poll_async_job` ở các mốc tiến độ hoặc dựa vào công cụ lập lịch (`schedule`).
-5. Chỉ khi `status == "COMPLETED"`, tiến hành trích xuất danh sách kết quả `results[]`.
+- Poll có khoảng nghỉ phù hợp thời gian job và tiếp tục công việc độc lập.
+  Không busy-wait, cũng không rời task với lời hứa job đã xong.
+- Hit cursor là byte offset next_cursor trả về, không row index/limit cộng dồn.
+  Trang bị giới hạn bởi JSON budget có thể ngắn hơn requested limit.
+- Cancel bằng poll_async_job(job_id,cancel=true), chờ terminal acknowledgement.
+  Một job commit xong trước cancel vẫn Completed; kiểm output thực tế.
+- Completed phải đọc result/status clone/map; partial acquisition có thể zero-fill.
+- Giữ WAL/hit files/source binding và staged commit recovery paths. Session reopen
+  không tự resume job. Quota/no-space không được xử lý bằng xóa chứng cứ.
+- Không có overlay_memory_used_kb hoặc auto flush 512 MB như tài liệu lịch sử.
+  Xem capabilities cho patch-history/WAL bounds, không clear/reopen để mất state.
 
----
-
-## 3. Quản Lý Ngân Sách RAM Overlay (`VirtualDiskOverlay`)
-Mỗi sector vá trong RAM tiêu tốn 512 bytes đến 4096 bytes cộng với overhead của HashMap.
-- Giới hạn khuyến nghị: `512 MB` (đủ để lưu trữ hơn `1,000,000` sector phân vùng và siêu dữ liệu).
-- Luôn kiểm tra trường `overlay_memory_used_kb` trong kết quả của `virtual_patch_and_verify`.
-- Nếu `overlay_memory_used_kb > 450,000 KB` (90% dung lượng), đóng và khởi tạo lại session mới để giải phóng RAM trước khi tiếp tục các bài kiểm tra tiếp theo.
+Zero-hit chuyển [coverage/reader/format](../../recovery-triage/references/acquisition-and-formats.md#zero-hit);
+báo kết quả theo [template](../../recovery-triage/references/report-and-handoff.md).

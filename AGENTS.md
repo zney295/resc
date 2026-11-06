@@ -73,6 +73,20 @@ exFAT/EXT4 recovery, encrypted volumes without keys, arbitrary fragment-order
 reconstruction and missing-moov regeneration are not implemented.
 A failed, skipped or unsupported operation is not successful recovery.
 
+The version-3 skill router covers device/media, access, reader disagreement,
+00/FF-dominant images, zero-hit, partial acquisition, persistence and output
+failures before partition/content recovery. Start with
+[the case matrix](.agents/skills/recovery-triage/references/case-matrix.md).
+Treat screenshot/old-report claims as user_reported, not current observed tests.
+No Media/zero/unknown capacity is not permission to patch a boot record.
+An image hash does not establish original USB payload or persistence. Skill
+upgrades do not authorize destructive capacity/firmware/write tests on user media.
+
+`scripts/evidence_audit.py` audits/compares regular image files only, with bounded
+run samples and explicit whole/partial coverage. It does not acquire raw Windows
+devices, test reader/cache correctness or perform USB writes. Tests are synthetic;
+never claim actual user-device recovery from passing them.
+
 For an unbootable computer read docs/two-computer-rescue.vi.md first. If a Live OS
 can run, inventory there and acquire onto a separate healthy disk before scanning.
 rescue.py defaults to a plan; --run writes only the destination case. Do not
@@ -100,6 +114,8 @@ python tests/test_recovery_workbench.py
 python tests/test_deleted_recovery.py
 python tests/test_three_cases.py
 python tests/test_rescue.py
+python tests/test_evidence_audit.py
+python tests/test_recovery_skills.py
 node bin/resc-mcp.js --version
 ```
 

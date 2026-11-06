@@ -31,6 +31,10 @@ Read the **[Vietnamese step-by-step recovery guide](docs/recovery-guide.vi.md)**
 for installation, selecting raw source images, diagnosing multiple failure types,
 MP4/MOV box analysis, exact byte-range reconstruction and FFmpeg verification.
 The workbench does not require choosing a failure hypothesis in advance.
+The [version-3 recovery skills](docs/skill-upgrade.vi.md) route 17 case types,
+including USB No Media, reader disagreement, 00/FF-dominant images, zero-hit and
+persistence failures. They include a streaming read-only image audit/comparison
+helper; they do not claim to repair hardware or create bytes missing from a source.
 For a computer that cannot boot its OS, start with the
 [two-computer / Linux Live rescue guide](docs/two-computer-rescue.vi.md).
 `scripts/rescue.py` adds Linux device inventory, GNU ddrescue acquisition with

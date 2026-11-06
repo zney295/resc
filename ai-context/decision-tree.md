@@ -4,6 +4,12 @@ Consult `tools/list` and [capabilities](../docs/engine-capabilities.md) first. A
 LBAs use the session sector_size (512 or 4096). Unsupported features return errors; never infer that a
 recovery step occurred merely because it appears in an older playbook.
 
+Before step 1, follow the [skill case matrix](../.agents/skills/recovery-triage/references/case-matrix.md).
+Do not open/scan 0-byte No Media as a partition problem. For unstable readers,
+00/FF-dominant images or zero-hit, first verify identity/ranges/coverage/map and
+reader controls. Image audit does not establish persistence or original contents.
+See [the skill upgrade guide](../docs/skill-upgrade.vi.md) for the read-only helper.
+
 1. Open a regular image with `open_recovery_session(target_path, sector_size?)`.
    A zero-length, misaligned or unreadable source must fail. Raw device exports are
    currently unsupported because destination-device isolation is not implemented.

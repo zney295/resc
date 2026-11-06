@@ -70,6 +70,11 @@ jobs:
       - name: Run Rescue Acquisition and Transfer Tests
         run: python tests/test_rescue.py
 
+      - name: Run Evidence Audit and Recovery Skill Contract Tests
+        run: |
+          python tests/test_evidence_audit.py
+          python tests/test_recovery_skills.py
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

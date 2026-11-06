@@ -1,62 +1,26 @@
-# Playbook 05: Cách Ly Phần Cứng Hỏng & Nhân Bản An Toàn Với DDRescue
+# Acquisition khi read error, reset hoặc disconnect
 
-## 1. Dấu hiệu Nhận biết
-- `bad_sectors_count > 0` trong kết quả của `open_recovery_session`.
-- Thời gian đọc của một sector vượt quá `200ms` (Read Timeout).
-- Hệ điều hành liên tục reset bus SATA/NVMe hoặc USB tự ngắt kết nối.
+Không đồng nhất chậm 200 ms với bad sector, hoặc mọi USB flash lỗi với HDD head
+crash. Ghi lỗi OS, timeout/short read, reset/capacity drift và source identity.
 
-## 2. Nguyên tắc An toàn Cực hạn
-> **CẢNH BÁO:** Không thực hiện bất kỳ lệnh quét sâu (`SIMD_MAGIC_CARVE`) hay phân tích Metadata lặp đi lặp lại trực tiếp trên ổ đĩa vật lý đang bị bad sector. Đầu từ đọc (Read/Write Head) có thể bị crash hoàn toàn, dẫn đến hư hỏng vĩnh viễn bề mặt đĩa từ.
+- Không scan metadata/signature sâu nhiều lần trên nguồn đang suy giảm. Chọn
+  acquisition có budget hoặc chuyên gia hardware; No Media chưa có nguồn đọc.
+- Trên Linux Live, dùng `scripts/rescue.py devices`, plan acquire rồi explicit
+  --run; nguồn unmounted, ổ đích độc lập, geometry đúng. Fast/retry/resume/seal
+  là GNU ddrescue CLI thật, xem [hướng dẫn](../../../../docs/two-computer-rescue.vi.md).
+- Không bypass source/destination backing checks, không ghi map/ảnh lên nguồn.
+  Không tự tăng retry vô hạn hay resume với device identity khác.
+- Giữ rescue.map/source.json/image và sealed/received manifest. Ảnh PARTIAL có
+  zero ở vùng unresolved; đó là unknown, không tự là bytes gốc.
+- MCP DD_RESCUE_CLONE chỉ copy **ảnh** với per-sector fallback, không GNU ddrescue,
+  không resume/multi-pass. Raw-device export/clone vẫn bị chặn.
+- Poll dùng job_id, không session_id; terminal result cần kiểm riêng partial và
+  unreadable bytes. Completed không có nghĩa mọi byte đọc thành công.
+- Sau acquisition mở session ảnh bằng target_path/sector_size. Giữ RESC_SESSION_ROOT
+  và không dùng phiên raw đang lỗi để quét lại nếu ảnh đã đủ.
+- Cancellation/watchdog yêu cầu dừng I/O nhưng driver không đáp ứng vẫn có thể
+  trì hoãn. Không hứa hard timeout hoặc reboot làm thiết bị lành.
 
-## 3. Quy trình Clone 3 Giai đoạn (3-Phase Rescue Clone)
-
-Gọi `start_async_disk_job` với kiểu `DD_RESCUE_CLONE`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 10,
-  "method": "tools/call",
-  "params": {
-    "name": "start_async_disk_job",
-    "arguments": {
-      "session_id": "<SESSION_ID>",
-      "job_type": "DD_RESCUE_CLONE",
-      "params": {
-        "destination_image": "D:/RescueImages/disk_clone.img",
-        "mapfile": "D:/RescueImages/disk_clone.map",
-        "retry_passes": 1,
-        "max_read_rate": "50M"
-      }
-    }
-  }
-}
-```
-
-### Các giai đoạn thực thi tự động của Engine:
-1. **Giai đoạn 1 (Fast Copy - Non-Scraped):** Đọc tuần tự các block lớn (64KB - 1MB). Khi gặp bad block đầu tiên, nhảy qua một khoảng lớn (`cluster skip`) để cứu tối đa các vùng dữ liệu lành lặn với tốc độ cao nhất trước khi ổ đĩa bị suy giảm thêm.
-2. **Giai đoạn 2 (Scraping):** Quay lại đọc các vùng biên tiếp giáp giữa khối dữ liệu tốt và khối lỗi để thu hẹp vùng chưa đọc.
-3. **Giai đoạn 3 (Trimming / Retrying):** Thử đọc lại các sector nghi ngờ lỗi với kích thước 512 bytes và số lần thử (`retry_passes = 1`).
-
-## 4. Polling và Chuyển Session
-Định kỳ thăm dò tiến độ bằng `poll_async_job`:
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 11,
-  "method": "tools/call",
-  "params": {
-    "name": "poll_async_job",
-    "arguments": {
-      "session_id": "<SESSION_ID>",
-      "job_id": "<JOB_ID>"
-    }
-  }
-}
-```
-
-Khi `status == "COMPLETED"`:
-1. Đóng phiên làm việc với ổ đĩa vật lý.
-2. Mở phiên làm việc mới trỏ trực tiếp vào file ảnh đã nhân bản:
-   `open_recovery_session(path="D:/RescueImages/disk_clone.img")`.
-3. Tiến hành các bước phân tích phân vùng và khôi phục tệp trên file ảnh an toàn.
+[Reader controls](../../recovery-triage/references/reader-controls.md) và
+[report](../../recovery-triage/references/report-and-handoff.md) xác định bằng
+chứng còn thiếu khi kết quả ảnh giữa các reader không thống nhất.

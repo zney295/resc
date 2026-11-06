@@ -1,34 +1,24 @@
-# Playbook: Cứu Video MP4 / MOV Bị Phân Mảnh Atom moov & mdat
+# MP4/MOV: box evidence và extents, chưa tái tạo moov
 
-## 1. Cấu Trúc Khối Atom của Chuẩn ISO Base Media (MP4/MOV)
-Một file MP4 hợp lệ là một chuỗi các khối `box` (atom) liên tiếp:
-- Mỗi atom gồm: `size` (4 bytes big-endian) + `type` (4 ký tự ASCII) + `data` (`size - 8` bytes).
-- Nếu `size == 1`, atom sử dụng trường 64-bit `largesize` nằm ở 8 byte tiếp theo.
+ISO BMFF có size32, extended size64 và size0 theo file/view boundary; QuickTime
+cũ có thể không ftyp. moov/mdat có nhiều vị trí hợp lệ, không mặc định header mẫu
+00 00 00 18 hay moov luôn ở cuối.
 
-### 3 Atom Then Chốt Cần Nhớ:
-1. `ftyp` (File Type Box): Thường nằm ở offset 0 (ví dụ: `isom`, `mp42`).
-2. `mdat` (Media Data Box): Chứa toàn bộ dòng bit âm thanh / video nén (H.264/H.265/AAC). Thường chiếm 99% kích thước file.
-3. `moov` (Movie Box): Chứa bảng chỉ mục khung hình, mẫu thời gian (`stts`, `stsz`, `stco`, `co64`).
-   - Trên camera/điện thoại hiện đại, `moov` thường được ghi ở **cuối cùng** của file sau khi quá trình quay video dừng lại.
-   - Nếu camera bị tắt nguồn đột ngột hoặc ổ đĩa bị format, atom `moov` thường bị tách rời khỏi `mdat`.
+1. Trên ảnh ổn định, ISO_BMFF_BOX_SCAN phát hiện plausible ftyp/moov/mdat/moof
+   headers. Không dùng SIMD_MAGIC_CARVE với target_patterns tự chế.
+2. Đối chiếu box length, filesystem extents, source identity và logical order;
+   gần nhau trên disk không chứng minh cùng video.
+3. analyze_video_candidate nhận ordered non-overlapping byte ranges. Nó kiểm
+   box bounds và stco/co64 chunk starts, không mọi sample extent/timeline/codec.
+4. MISSING_MOOV khác CHUNK_OFFSETS_OUTSIDE_MDAT và budget-exceeded. fMP4 cần
+   demuxer; thiếu moov không tự cho phép ghép bất kỳ moov từ video khác.
+5. CARVE_BY_BYTE_RANGES xuất đúng plan; tool không rewrite stco/co64, tái tạo moov
+   hay suy thứ tự mảnh tự động.
+6. recovery.py verify-media --decode trên output dùng FFmpeg độc lập. Decoder
+   pass vẫn có thể sai nội dung, như counterexample trong nghiên cứu của repo.
+7. Nếu dùng Untrunc/donor/remux ngoài resc thì ghi engine/version, donor
+   compatibility, generated header/index và derivative provenance; chưa có native
+   integration hoặc success rate do skill này tạo ra.
 
----
-
-## 2. Dấu Hiệu Video MP4 Bị Đứt Đoạn
-- Trích xuất file MP4 có atom `ftyp` và bắt đầu của `mdat`, nhưng video không thể mở được trên VLC/Media Player ("Cannot read index" hoặc "Muxer error").
-- Kiểm tra hex bằng `inspect_sector_structure`: Cuối file không thấy atom `moov`.
-
----
-
-## 3. Quy Trình Khôi Phục Atom moov Bị Lạc
-1. Chạy lệnh săn tìm atom `moov` bằng SIMD:
-   Gọi `start_async_disk_job(job_type="SIMD_MAGIC_CARVE", params={"target_patterns": ["6d6f6f76"]})`.
-2. Đối với mỗi atom `moov` tìm được:
-   - Đọc 4 byte trước chuỗi `moov` để lấy kích thước của atom.
-   - Kiểm tra atom `mvhd` (Movie Header) bên trong `moov`:
-     - Tần số xung nhịp (`timescale`).
-     - Độ dài thời gian (`duration`).
-   - Kiểm tra atom `stco` / `co64` (Chunk Offset Box): Đây là bảng chứa danh sách các offset byte trỏ vào dữ liệu video trong `mdat`.
-3. Ghép nối:
-   - Điều chỉnh lại các giá trị trong bảng `stco` (Chunk Offset) cho khớp với vị trí LBA bắt đầu của dữ liệu `mdat` trên đĩa.
-   - Trích xuất kết hợp `[ftyp + mdat]` và `[moov]` thành tệp `.mp4` hoàn chỉnh.
+Xem [nghiên cứu](../../../../docs/research/deep-evidence-study.vi.md) và
+[format routes](../../recovery-triage/references/acquisition-and-formats.md).

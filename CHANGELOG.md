@@ -1,3 +1,14 @@
+# Recovery skills v3
+
+- Expand all five skill entry points with 17 symptom/evidence routes, reader
+  controls, No Media/00-FF/zero-hit handling, persistence lab boundaries and
+  explicit recovery vs reuse outcomes.
+- Replace obsolete playbook calls/claims with implemented MCP parameters and
+  clearly marked external-only filesystem/content routes.
+- Add streaming regular-image audit/comparison with exact fill counts, bounded
+  sector/difference runs, full/partial SHA-256 semantics and synthetic regressions.
+- Validate local skill reference links and JSON MCP examples against the catalog.
+
 # Linux Live and two-computer rescue (2026-10-27)
 
 - Add Linux inventory and guarded GNU ddrescue acquisition with explicit fast,
