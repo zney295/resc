@@ -14,6 +14,7 @@ pub mod fat_parser;
 pub mod fragment_matcher;
 pub mod iso_bmff;
 pub mod mbr_gpt;
+pub mod metadata_anchors;
 pub mod ntfs_parser;
 pub mod simd_scanner;
 
@@ -65,6 +66,9 @@ mod malformed_input_tests {
                 super::fat_parser::analyze_fat32(&bytes);
                 super::iso_bmff::analyze(&mut std::io::Cursor::new(&bytes), bytes.len() as u64)
                     .ok();
+                super::metadata_anchors::fat_directory(&bytes);
+                super::metadata_anchors::exfat_entry(&bytes);
+                super::metadata_anchors::ntfs_index(&bytes, 512);
             });
             assert!(
                 outcome.is_ok(),

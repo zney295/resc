@@ -15,6 +15,10 @@
   "type": "commonjs",
   "files": [
     "bin/",
+    ".agents/skills/",
+    "scripts/setup_clients.py",
+    "scripts/evidence_audit.py",
+    "scripts/usb_format_verify.py",
     "README.md",
     "AGENTS.md",
     "mcp_config.example.json",
@@ -23,6 +27,7 @@
   ],
   "scripts": {
     "start": "node ./bin/resc-mcp.js",
+    "setup:clients": "python scripts/setup_clients.py",
     "inspect": "npx @modelcontextprotocol/inspector node ./bin/resc-mcp.js",
     "build:rust": "cargo build --release",
     "test:e2e": "python tests/test_e2e_recovery.py"

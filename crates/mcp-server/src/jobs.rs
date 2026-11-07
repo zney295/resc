@@ -1,9 +1,12 @@
 //! Blocking worker implementations. The overlay lock is released per 64 KiB chunk.
 use crate::{handlers::RecoverySession, job_manager::JobManager, safe_output::PendingOutput};
 use anyhow::{bail, ensure, Context, Result};
-use disk_parsers::{fragment_matcher::evaluate_fragment_match, simd_scanner::StreamingScanner};
+use disk_parsers::{
+    fragment_matcher::evaluate_fragment_match, metadata_anchors, simd_scanner::StreamingScanner,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
@@ -81,7 +84,7 @@ pub fn validate_params(kind: &str, params: &Value, session: &RecoverySession) ->
             serde_json::from_value::<DeletedParams>(params.clone())?
                 .validate(session.total_sectors)?;
         }
-        "SIMD_MAGIC_CARVE" | "SIMD_VBR_HUNT" | "ISO_BMFF_BOX_SCAN" => {
+        "SIMD_MAGIC_CARVE" | "SIMD_VBR_HUNT" | "ISO_BMFF_BOX_SCAN" | "METADATA_WITHOUT_VBR" => {
             serde_json::from_value::<ScanParams>(params.clone())?.range(session.total_sectors)?;
         }
         "FRAGMENT_PREFILTER" => {
@@ -169,6 +172,7 @@ impl Worker<'_> {
             "SIMD_MAGIC_CARVE" | "SIMD_VBR_HUNT" | "ISO_BMFF_BOX_SCAN" => {
                 self.scan(kind, serde_json::from_value(params)?)
             }
+            "METADATA_WITHOUT_VBR" => self.metadata(serde_json::from_value(params)?),
             "FRAGMENT_PREFILTER" => self.fragments(serde_json::from_value(params)?),
             "DD_RESCUE_CLONE" => self.clone_image(serde_json::from_value(params)?),
             _ => bail!("NotImplemented: unsupported job type {kind}"),
@@ -308,6 +312,87 @@ impl Worker<'_> {
         Ok(
             json!({"start_lba":start,"end_lba":end,"sectors_scanned":end-start,"hits_count":hits,"counts_by_type":types,"sample_hits":samples,"samples_truncated":hits > samples.len() as u64}),
         )
+    }
+
+    fn metadata(&self, params: ScanParams) -> Result<Value> {
+        use metadata_anchors::{
+            exfat_entry, fat_directory, fat_layout, ntfs_index, MAX_ANCHOR_BYTES,
+        };
+        let (start, end) = params.range(self.session.total_sectors)?;
+        let sector = self.session.sector_size as usize;
+        let mut spool = self.hit_spool()?;
+        let mut hash = Sha256::new();
+        let mut counts = BTreeMap::<&str, u64>::new();
+        let mut hits = 0;
+        let mut previous_fat = None;
+        let mut lba = start;
+        let mut carry = 0;
+        let mut buffer = vec![0; 65536 + MAX_ANCHOR_BYTES];
+        while lba < end {
+            let count = (end - lba).min((65536 / sector) as u64) as usize;
+            let available = (end - lba).min((count + MAX_ANCHOR_BYTES / sector) as u64) as usize;
+            let bytes = &mut buffer[..available * sector];
+            if available > carry {
+                self.read(
+                    lba + carry as u64,
+                    available - carry,
+                    &mut bytes[carry * sector..],
+                )?;
+            }
+            hash.update(&bytes[..count * sector]);
+            let mut emit = |kind, byte_offset, candidate| -> Result<()> {
+                spool.append(json!({"kind":kind,"byte_offset":byte_offset,
+                    "lba":byte_offset / sector as u64,"confidence":"derived","candidate":candidate}))?;
+                hits += 1;
+                *counts.entry(kind).or_default() += 1;
+                Ok(())
+            };
+            for i in 0..count {
+                self.check_cancel()?;
+                let position = lba + i as u64;
+                let offset = position * sector as u64;
+                let data = &bytes[i * sector..];
+                if let Some(directory) = fat_directory(data) {
+                    let current = (position, directory.first_cluster);
+                    let layout = previous_fat.and_then(|first| fat_layout(first, current, sector));
+                    emit(
+                        "FAT32_DIRECTORY",
+                        offset,
+                        json!({"directory":directory,"layout_candidate":layout}),
+                    )?;
+                    previous_fat = Some(current);
+                }
+                if let Some(entries) = ntfs_index(data, sector) {
+                    for entry in entries {
+                        emit("NTFS_INDEX_ENTRY", offset, json!(entry))?;
+                    }
+                }
+                for slot in (0..sector).step_by(32) {
+                    if let Some(entry) = exfat_entry(&data[slot..]) {
+                        emit("EXFAT_ENTRY_SET", offset + slot as u64, json!(entry))?;
+                    }
+                }
+            }
+            carry = available - count;
+            buffer.copy_within(count * sector..available * sector, 0);
+            lba += count as u64;
+            self.manager
+                .progress(self.id, lba - start, end - start, hits);
+        }
+        self.check_cancel()?;
+        let hits_sha256 = spool.finish()?;
+        let evidence = json!({
+            "version":1, "kind":"metadata_scan",
+            "evidence_id":self.id, "session_id":self.session.session_id,
+            "confidence":"derived", "overlay_revision":self.revision,
+            "start_lba":start, "end_lba":end, "sector_size":sector, "sectors_scanned":end-start,
+            "scanned_overlay_sha256":format!("{:x}", hash.finalize()),
+            "hits_sha256":hits_sha256, "hits_count":hits, "counts_by_type":counts,
+            "limitations":["Validated structures are recovery candidates. Allocation and file contents are unverified.",
+                "NTFS INDX records are limited to 4096 bytes. exFAT entry sets must be physically contiguous."],
+        });
+        crate::session_store::save_evidence(&self.session.session_dir, self.id, &evidence)?;
+        Ok(evidence)
     }
     fn fragments(&self, p: FragmentParams) -> Result<Value> {
         let mut spool = self.hit_spool()?;

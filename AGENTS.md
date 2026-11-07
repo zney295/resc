@@ -35,7 +35,7 @@ stdio. Read [implemented capabilities](docs/engine-capabilities.md), the
 | Tool | Core arguments / actual role |
 | --- | --- |
 | list_physical_drives | Windows enumeration; other OS returns NotImplemented |
-| open_recovery_session | target_path, optional sector_size/resume_session_id |
+| open_recovery_session | target_path, optional sector_size/resume_session_id/storage_diagnostics |
 | diagnose_recovery | session_id; sampled evidence and multiple next routes |
 | scan_disk_topology | session_id; MBR/GPT bounds and CRCs |
 | inspect_sector_structure | session_id, lba, count 1..8, optional parse_as |
@@ -53,7 +53,7 @@ stdio. Read [implemented capabilities](docs/engine-capabilities.md), the
 | disk_apply_patch | Legacy default-session alias |
 | disk_rollback_patches | Legacy default-session alias |
 
-Jobs: SIMD_MAGIC_CARVE, SIMD_VBR_HUNT, ISO_BMFF_BOX_SCAN, FRAGMENT_PREFILTER,
+Jobs: SIMD_MAGIC_CARVE, SIMD_VBR_HUNT, ISO_BMFF_BOX_SCAN, METADATA_WITHOUT_VBR, FRAGMENT_PREFILTER,
 DD_RESCUE_CLONE, FAT32_DELETED_SCAN. The deleted-entry job requires
 partition_start_lba and optional max_clusters (1..4096), scans root SFN entries
 only, and emits candidate extents only under conservative allocation checks.
@@ -69,11 +69,11 @@ Video structure consistency is not decoding, correct fragment content or full
 sample-table validation. Verify exported MP4/MOV using FFmpeg when available.
 FAT32 root deleted short entries have limited evidence-led scanning; single-cluster
 FAT-free candidates remain content-unverified. NTFS deleted records/journals,
-exFAT/EXT4 recovery, encrypted volumes without keys, arbitrary fragment-order
+exFAT/EXT4 tree extraction, encrypted volumes without keys, arbitrary fragment-order
 reconstruction and missing-moov regeneration are not implemented.
 A failed, skipped or unsupported operation is not successful recovery.
 
-The version-3 skill router covers device/media, access, reader disagreement,
+The recovery skill router covers device/media, access, reader disagreement,
 00/FF-dominant images, zero-hit, partial acquisition, persistence and output
 failures before partition/content recovery. Start with
 [the case matrix](.agents/skills/recovery-triage/references/case-matrix.md).
@@ -82,9 +82,9 @@ No Media/zero/unknown capacity is not permission to patch a boot record.
 An image hash does not establish original USB payload or persistence. Skill
 upgrades do not authorize destructive capacity/firmware/write tests on user media.
 
-`scripts/evidence_audit.py` audits/compares regular image files only, with bounded
-run samples and explicit whole/partial coverage. It does not acquire raw Windows
-devices, test reader/cache correctness or perform USB writes. Tests are synthetic;
+`scripts/evidence_audit.py` audits/compares regular image files with bounded run
+samples and explicit whole/partial coverage. Its `verify-artifact` command checks
+extraction or metadata-scan manifests against their regular-file artifacts. Tests are synthetic;
 never claim actual user-device recovery from passing them.
 
 For an unbootable computer read docs/two-computer-rescue.vi.md first. If a Live OS
@@ -116,6 +116,7 @@ python tests/test_three_cases.py
 python tests/test_rescue.py
 python tests/test_evidence_audit.py
 python tests/test_recovery_skills.py
+python tests/test_usb_format_verify.py
 node bin/resc-mcp.js --version
 ```
 

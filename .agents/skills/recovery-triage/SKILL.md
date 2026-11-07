@@ -2,7 +2,7 @@
 name: recovery-triage
 description: Phân loại nhiều tình huống cứu dữ liệu kể cả chưa biết loại file; kiểm chứng USB/reader, acquisition, ảnh 00/FF, zero-hit, persistence và recovery qua MCP theo bằng chứng.
 metadata:
-  version: "3.0"
+  version: "4.1"
 ---
 
 # Recovery triage — kiểm chứng trước khi chọn cách cứu
@@ -29,6 +29,9 @@ báo cáo không xác nhận hash, reader, 15 GB đã đọc hay số test trên
    quyền, volume RAW/không có drive letter và thiết bị mất kết nối.
    Đọc [USB/Windows](references/windows-usb.md). USB 0 byte chưa có sector để scan;
    nhãn `TARGET_EXTERNAL_DRIVE` của inventory cũ không chứng minh recoverability.
+   Trên phiên thiết bị Windows mở được, dùng `storage_diagnostics: true` để lấy
+   mô tả thiết bị và trạng thái chống ghi. Khi có binary phù hợp, xem
+   [phân tích tĩnh REA và IOCTL](references/rea-binary-and-ioctl-analysis.md).
 2. **Tin cậy đầu vào:** nếu reader không đồng ý hoặc 00/FF chiếm ưu thế, kiểm tra
    cùng identity, địa chỉ, độ dài, geometry, overlay revision và acquisition map.
    Dùng [reader controls](references/reader-controls.md); chưa biết reader đúng thì
@@ -47,6 +50,7 @@ báo cáo không xác nhận hash, reader, 15 GB đã đọc hay số test trên
    SFN và candidate có giới hạn. Khi cần, scan signature/VBR/video trên ảnh với
    phạm vi và budget; [zero-hit](references/acquisition-and-formats.md#zero-hit)
    không đồng nghĩa không cứu được. Định dạng lạ/mã hóa phải có nhánh riêng.
+   `METADATA_WITHOUT_VBR` tìm ứng viên FAT32, exFAT và NTFS khi mất vùng boot.
 7. **Content:** dùng `analyze_file_candidate`/`analyze_video_candidate` với byte
    plan có căn cứ. Giữ các candidate mâu thuẫn; structure/decode/hash/human review
    là các bằng chứng khác nhau. Không tự suy thứ tự mảnh bằng entropy.
@@ -56,6 +60,8 @@ báo cáo không xác nhận hash, reader, 15 GB đã đọc hay số test trên
 9. **USB dùng lại:** chỉ sau khi bảo toàn dữ liệu, đi nhánh
    [persistence/capacity lab](references/persistence-lab.md). Nâng cấp skill không
    cho phép tự ghi dữ liệu thử, format, flash firmware hay F3 lên USB của người dùng.
+   Nếu người vận hành đã thu các ảnh T0/T1/T2 và tệp canary, dùng
+   `scripts/usb_format_verify.py` để đối chiếu MBR, boot và hash đã cung cấp.
 10. Báo [kết quả/handoff](references/report-and-handoff.md): số file thực sự lấy
     được; bytes chưa biết; điều đã/chưa kiểm chứng; bước tiếp theo và lý do dừng.
 

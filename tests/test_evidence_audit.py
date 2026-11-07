@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
+from test_e2e_recovery import McpClient
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('evidence_audit', ROOT / 'scripts/evidence_audit.py')
 audit = importlib.util.module_from_spec(SPEC)
@@ -297,6 +299,140 @@ class EvidenceAuditTests(unittest.TestCase):
             self.skipTest('Hardlinks unavailable')
         with self.assertRaises(ValueError):
             audit.main(['audit', str(self.source), '--report', str(alias)])
+
+
+def exfat_set(name):
+    encoded = name.encode("utf-16le")
+    slots = (len(encoded) + 29) // 30
+    data = bytearray((slots + 2) * 32)
+    data[0:2] = bytes([0x85, slots + 1])
+    data[32:36] = bytes([0xC0, 3, 0, len(encoded) // 2])
+    struct.pack_into("<Q", data, 40, 10)
+    struct.pack_into("<IQ", data, 52, 5, 12)
+    for i in range(slots):
+        offset = 64 + i * 32
+        chunk = encoded[i * 30:(i + 1) * 30]
+        data[offset] = 0xC1
+        data[offset + 2:offset + 2 + len(chunk)] = chunk
+    checksum = 0
+    for i, byte in enumerate(data):
+        if i not in (2, 3):
+            checksum = (((checksum >> 1) | (checksum << 15)) + byte) & 0xFFFF
+    struct.pack_into("<H", data, 2, checksum)
+    return data
+
+
+def ntfs_indx(name):
+    block = bytearray(4096)
+    block[:4] = b"INDX"
+    struct.pack_into("<HHQQ", block, 4, 40, 9, 0, 42)
+    start = 64
+    encoded = name.encode("utf-16le")
+    key_length = 66 + len(encoded)
+    length = (16 + key_length + 7) & ~7
+    struct.pack_into("<III", block, 24, start - 24, start + length + 16 - 24, 4096 - 24)
+    struct.pack_into("<QHHHH", block, start, 16, length, key_length, 0, 0)
+    struct.pack_into("<Q", block, start + 16, 5)
+    block[start + 80:start + 82] = bytes([len(encoded) // 2, 1])
+    block[start + 82:start + 82 + len(encoded)] = encoded
+    struct.pack_into("<HHH", block, start + length + 8, 16, 0, 2)
+    block[40:42] = b"\x34\x12"
+    for i in range(1, 9):
+        trailer = i * 512 - 2
+        block[40 + i * 2:42 + i * 2] = block[trailer:trailer + 2]
+        block[trailer:trailer + 2] = block[40:42]
+    return block
+
+
+def fat_directory(cluster):
+    data = bytearray(64)
+    data[:12] = b".          \x10"
+    data[32:44] = b"..         \x10"
+    struct.pack_into("<H", data, 26, cluster)
+    return data
+
+
+class EvidenceAuditTest(unittest.TestCase):
+    def test_metadata_scan_and_sealed_spool(self):
+        for sector in (512, 4096):
+            with self.subTest(sector=sector), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "no-vbr.img"
+                image = bytearray(256 * sector)
+                # The exFAT set and the INDX record cross separate 64 KiB chunk boundaries.
+                exfat_offset = 65536 - 32
+                ntfs_offset = 65536 * 2 - sector if sector == 512 else 65536 * 3 - sector
+                if sector == 512:
+                    image.extend(bytes(4096))
+                exfat_name = "dữ-liệu-vẫn-còn.txt"
+                exfat = exfat_set(exfat_name)
+                image[exfat_offset:exfat_offset + len(exfat)] = exfat
+                broken = exfat_set("invalid-checksum.txt")
+                broken[2] ^= 1
+                image[sector:sector + len(broken)] = broken
+                index_name = "名" * 255
+                image[ntfs_offset:ntfs_offset + 4096] = ntfs_indx(index_name)
+                broken_index = ntfs_indx("broken-fixup")
+                broken_index[510] ^= 1
+                image[200 * sector:200 * sector + 4096] = broken_index
+                image[40 * sector:40 * sector + 64] = fat_directory(5)
+                image[48 * sector:48 * sector + 64] = fat_directory(7)
+                source.write_bytes(image)
+                client = McpClient()
+                try:
+                    opened = client.call_tool("open_recovery_session", {
+                        "target_path": str(source), "sector_size": sector, "storage_diagnostics": True})
+                    self.assertEqual(opened["storage_diagnostics"]["status"], "unavailable")
+                    sid = opened["session_id"]
+                    job = client.job(sid, "METADATA_WITHOUT_VBR")
+                    result = client.wait(job)
+                    self.assertEqual(result["counts_by_type"], {
+                        "EXFAT_ENTRY_SET": 1, "FAT32_DIRECTORY": 2, "NTFS_INDEX_ENTRY": 1})
+                    self.assertEqual(result["evidence_id"], job)
+                    self.assertEqual(result["scanned_overlay_sha256"], hashlib.sha256(image).hexdigest())
+                    rows = []
+                    cursor = 0
+                    while True:
+                        page = client.call_tool("read_scan_hits", {
+                            "session_id": sid, "job_id": job, "cursor": cursor, "limit": 1})
+                        rows.extend(page["hits"])
+                        if not page["has_more"]:
+                            break
+                        cursor = page["next_cursor"]
+                    self.assertEqual(len(rows), 4)
+                    self.assertIn(exfat_name, [row["candidate"].get("name") for row in rows])
+                    self.assertIn(index_name, [row["candidate"].get("name") for row in rows])
+                    self.assertEqual(next(row for row in rows if row["lba"] == 48)["candidate"]["layout_candidate"],
+                                     {"data_start_lba": 28, "sectors_per_cluster": 4, "anchor_lbas": [40, 48]})
+                    stored = Path(opened["session_dir"])
+                    manifest_path = stored / f"{job}_evidence.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    spool = stored / f"{job}_hits.jsonl"
+                    self.assertEqual(audit.verify_artifact(manifest, spool)["hits_count"], 4)
+                    result = subprocess.run(
+                        [sys.executable, str(ROOT / "scripts/evidence_audit.py"),
+                         "verify-artifact", str(manifest_path), str(spool)],
+                        capture_output=True, text=True, encoding="utf-8", check=True)
+                    self.assertEqual(json.loads(result.stdout)["evidence_id"], job)
+                    tampered = Path(directory) / "tampered.jsonl"
+                    tampered.write_bytes(spool.read_bytes().replace(b'"derived"', b'"observed"', 1))
+                    with self.assertRaisesRegex(ValueError, "SHA-256 differs"):
+                        audit.verify_artifact(manifest, tampered)
+                finally:
+                    client.close()
+                self.assertEqual(source.read_bytes(), image)
+
+    def test_extraction_audit_checks_ranges_and_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            payload = Path(directory) / "output.bin"
+            payload.write_bytes(b"data")
+            manifest = {"version": 1, "size_bytes": 4, "sector_size": 512,
+                        "sha256_hash": hashlib.sha256(b"data").hexdigest(), "source_lba_ranges": [
+                            {"output_byte_offset": 0, "source_byte_offset": 511, "length_bytes": 4,
+                             "start_lba": 0, "end_lba_exclusive": 2}]}
+            self.assertEqual(audit.verify_artifact(manifest, payload)["status"], "AUDITED")
+            manifest["source_lba_ranges"][0]["end_lba_exclusive"] = 1
+            with self.assertRaisesRegex(ValueError, "provenance extent"):
+                audit.verify_artifact(manifest, payload)
 
 
 if __name__ == '__main__':

@@ -74,6 +74,7 @@ jobs:
         run: |
           python tests/test_evidence_audit.py
           python tests/test_recovery_skills.py
+          python tests/test_usb_format_verify.py
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

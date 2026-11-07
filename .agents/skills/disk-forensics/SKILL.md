@@ -2,7 +2,7 @@
 name: disk-forensics-and-recovery
 description: Điều tra USB/SSD/HDD/ảnh đĩa: No Media, lỗi quyền, reader không ổn định, nguồn 00/FF, mất phân vùng và acquisition trước recovery.
 metadata:
-  version: "3.0"
+  version: "4.1"
 ---
 
 # Điều tra nguồn và bảo toàn dữ liệu
@@ -26,6 +26,8 @@ xác minh có nguồn byte đáng tin, không mặc định mọi USB không nh�
 Đọc [Windows/USB](../recovery-triage/references/windows-usb.md) hoặc
 [reader controls](../recovery-triage/references/reader-controls.md) khi liên quan.
 Helper audit chỉ nhận ảnh file thường; không dùng nó mở `D:` hoặc PhysicalDrive.
+Khi mở thiết bị Windows bằng MCP, tùy chọn `storage_diagnostics: true` trả dung
+lượng, mô tả thiết bị và trạng thái chống ghi do Windows báo.
 
 ## Luật thực hành
 

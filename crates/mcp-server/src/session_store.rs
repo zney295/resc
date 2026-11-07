@@ -80,3 +80,23 @@ pub fn open(
 pub fn wal_path(directory: &Path) -> PathBuf {
     directory.join("overlay.wal")
 }
+
+pub fn save_evidence(directory: &Path, id: &str, evidence: &serde_json::Value) -> Result<()> {
+    let pending = directory.join(format!("{id}_evidence.tmp"));
+    let final_path = directory.join(format!("{id}_evidence.json"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)?;
+    let result = (|| -> Result<()> {
+        serde_json::to_writer(&mut file, evidence)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&pending, final_path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(pending);
+    }
+    result
+}

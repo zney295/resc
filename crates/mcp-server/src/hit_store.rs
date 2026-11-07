@@ -1,20 +1,24 @@
 //! Append-only hit spool with byte-offset cursors and a bounded JSON page.
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
 };
+const MAX_ROW_BYTES: usize = 1536;
 pub struct HitWriter {
     file: File,
     count: u64,
+    hash: Sha256,
 }
 impl HitWriter {
     pub fn create(path: &Path) -> Result<Self> {
         Ok(Self {
             file: OpenOptions::new().write(true).create_new(true).open(path)?,
             count: 0,
+            hash: Sha256::new(),
         })
     }
     pub fn append(&mut self, mut value: Value) -> Result<()> {
@@ -23,15 +27,19 @@ impl HitWriter {
             .context("Hit must be an object")?
             .insert("hit_index".into(), self.count.into());
         let mut row = serde_json::to_vec(&value)?;
-        ensure!(row.len() <= 1024, "Hit record exceeds spool budget");
+        ensure!(
+            row.len() <= MAX_ROW_BYTES,
+            "Hit record exceeds spool budget"
+        );
         row.push(b'\n');
         self.file.write_all(&row)?;
+        self.hash.update(&row);
         self.count += 1;
         Ok(())
     }
-    pub fn finish(self) -> Result<()> {
+    pub fn finish(self) -> Result<String> {
         self.file.sync_all()?;
-        Ok(())
+        Ok(format!("{:x}", self.hash.finalize()))
     }
 }
 pub fn page(path: &Path, cursor: u64, limit: usize) -> Result<Value> {
@@ -52,13 +60,14 @@ pub fn page(path: &Path, cursor: u64, limit: usize) -> Result<Value> {
     let mut budget = 0;
     while rows.len() < limit {
         let mut row = Vec::new();
-        let size = (&mut reader).take(1025).read_until(b'\n', &mut row)?;
+        let size = (&mut reader)
+            .take((MAX_ROW_BYTES + 1) as u64)
+            .read_until(b'\n', &mut row)?;
         if size == 0 {
             break;
         }
-        ensure!(size <= 1025, "Malformed stored hit row");
         if row.last() != Some(&b'\n') {
-            ensure!(size < 1025, "Malformed stored hit row");
+            ensure!(size <= MAX_ROW_BYTES, "Malformed stored hit row");
             break;
         } // Writer has not finished this row yet.
         let value: Value = serde_json::from_slice(&row)?;

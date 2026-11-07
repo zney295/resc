@@ -2,7 +2,7 @@
 name: mcp-disk-automation
 description: Điều phối MCP recovery theo schema thật: async state, scan coverage, cancellation, hit pagination, WAL/quotas và báo partial/unsupported mà không giả lập thành công.
 metadata:
-  version: "3.0"
+  version: "4.1"
 ---
 
 # Điều phối tác vụ và lưu bằng chứng
@@ -25,6 +25,8 @@ tự tăng timeout/retry để giả có addressable media.
   Commit thành công chạy đua cancel có thể vẫn Completed với output.
 - Trang đầu không đại diện mọi hit. `read_scan_hits` lấy `next_cursor` trả về,
   limit 1..100; response có thể ít hàng hơn do budget 5 KB.
+- Với `METADATA_WITHOUT_VBR`, giữ ID bằng chứng, revision overlay và hai tệp
+  evidence/JSONL. Dùng `scripts/evidence_audit.py verify-artifact` để đối chiếu spool.
 - Không suy coverage từ tiến độ 100% nếu Failed/cancel/partial clone. Giữ unknown
   ranges, hit JSONL và [evidence report](../recovery-triage/references/report-and-handoff.md).
 - At most 4 running jobs, 32 sessions/process; hit files chiếm đĩa và không tự có

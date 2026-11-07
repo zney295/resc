@@ -75,8 +75,8 @@ class McpClient:
             time.sleep(.01)
         raise AssertionError("Job did not complete within 30 seconds")
     def close(self):
+        self.process.stdin.close()
         if self.process.poll() is None:
-            self.process.stdin.close()
             self.process.wait(timeout=5)
         self.reader.join(timeout=1)
         self.process.stdout.close()

@@ -2,7 +2,7 @@
 name: file-carving-and-defrag
 description: Tìm và kiểm chứng candidate khi metadata/file type chưa rõ, zero-hit, JPEG/PNG/MP4/MOV và file phân mảnh; giữ ambiguity và phân biệt parser/decoder/nội dung.
 metadata:
-  version: "3.0"
+  version: "4.1"
 ---
 
 # Carving và ghép extents có căn cứ
@@ -18,6 +18,7 @@ Không biết tên/loại file vẫn bắt đầu được; không cần ép ng�
    toàn ảnh hoặc các reader không đồng ý cần điều tra đầu vào trước đổi carver.
 2. Trên ảnh ổn định, dùng metadata extents trước nếu còn. Discovery bằng
    `SIMD_MAGIC_CARVE`, `SIMD_VBR_HUNT` và `ISO_BMFF_BOX_SCAN` theo phạm vi/budget.
+   Khi boot chính và dự phòng đều mất, `METADATA_WITHOUT_VBR` có thể tìm dấu vết thư mục.
    Mặc định scanner không đồng nghĩa mọi định dạng đều được nhận diện.
 3. Lấy toàn bộ hit qua cursor. Hit là candidate header, chưa phải file hoàn chỉnh.
    Khi zero-hit, đi nhánh coverage/offset/format/encryption; không lặp cùng scan

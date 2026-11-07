@@ -47,6 +47,15 @@ and failed reads are recorded in the bad-sector map. Cancellation is not reporte
 as an unreadable sector. This is not a hardware write blocker: the OS or another
 application can still change shared source media.
 
+Windows raw-device sessions prefer `IOCTL_DISK_GET_LENGTH_INFO` for capacity
+and use `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX` for logical sector size and fallback
+capacity. Set `storage_diagnostics: true` on `open_recovery_session` to include
+both lengths, the storage device descriptor, and Windows-reported write state.
+The Windows SCSI pass-through IOCTL requires read/write access. Resc reports that
+path as unavailable and retains the read-only handle. Device descriptors and
+write state describe the Windows-visible device or bridge. NAND and firmware
+diagnoses require separate evidence.
+
 ## Persistent virtual repairs
 
 `VirtualDiskOverlay` implements `Read + Seek` with dynamic 512/4096-byte sectors.
@@ -130,6 +139,7 @@ release the overlay between chunks and fail on a changed patch revision.
 | --- | --- | --- |
 | `SIMD_MAGIC_CARVE` | Signature discovery with at least 64-byte chunk overlap and duplicate suppression | Optional `start_lba`, `end_lba` (exclusive), or `count_sectors` |
 | `SIMD_VBR_HUNT` | Examines every sector in the requested range for NTFS/FAT boot candidates | Same range parameters |
+| `METADATA_WITHOUT_VBR` | Validates FAT32 directory anchors, exFAT entry-set checksums, and NTFS directory index records with update-sequence fixups | Same range parameters |
 | `FRAGMENT_PREFILTER` | Entropy/boundary scoring of real candidate blocks; reports five best candidates | Required `first_fragment_end_lba`; optional `candidate_start_lba`, `candidate_end_lba`, `cluster_sectors` (power of two, 1..128) |
 | `DD_RESCUE_CLONE` | Native image block copy plus mapfile, with per-sector fallback after failed reads | Required `destination_image`; optional `mapfile` |
 
@@ -141,6 +151,19 @@ all persisted hits with `read_scan_hits({session_id, job_id, cursor, limit})` or
 A partial line from an active writer is retried without advancing the cursor.
 Persisted hits can be read after reopening their session without rescanning.
 Hit files consume disk space; there is no automatic retention or disk quota.
+
+The metadata job reports counts and an evidence ID equal to the job ID. Its
+`<job_id>_evidence.json` records scan coverage, sector size, overlay revision,
+SHA-256 of the scanned overlay bytes, and SHA-256 of the hit spool. The NTFS
+parser checks sector-aligned INDX blocks up to 4096 bytes. exFAT sets must be
+physically contiguous and within the scan range. FAT32 layout candidates come
+from pairs of adjacent detected directory anchors and need corroboration.
+Validated metadata can identify a name or cluster reference. Allocation and
+file contents still require independent verification.
+
+`python scripts/evidence_audit.py verify-artifact MANIFEST ARTIFACT` checks the matching
+extraction or scan artifact against its manifest. Keep the evidence and original
+acquisition separately to verify provenance.
 
 At most four jobs run concurrently; up to 128 job records are retained, evicting
 finished records when needed. Up to 32 sessions can be opened per process.
@@ -171,7 +194,7 @@ Tool responses, including the JSON-RPC envelope, remain under 5 KB. `tools/list`
 is a capability catalog and can exceed this budget. Input lines are limited to
 256 KiB; notifications receive no response and unknown arguments are rejected.
 The launcher runs only an existing local binary; unverified automatic downloads
-are disabled. Journal/NTFS-deleted-record scanning, exFAT/EXT4 recovery, old inode and
+are disabled. Journal/NTFS-deleted-record scanning, exFAT/EXT4 tree extraction, old inode and
 PhotoRec aliases, and unsafe legacy subprocess adapters return `NotImplemented`.
 Fragment scores are heuristics, not calibrated probabilities or format validation.
 
@@ -183,6 +206,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo build --release --locked
 python tests/test_e2e_recovery.py
+python tests/test_evidence_audit.py
+python tests/test_usb_format_verify.py
+python tests/test_recovery_skills.py
 node --check bin/resc-mcp.js
 ```
 

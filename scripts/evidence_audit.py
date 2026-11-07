@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only audits of regular image files, never physical/volume device paths.
+"""Read-only audits of disk images and recovery artifacts.
 
 Streaming SHA-256, 00/FF counts, bounded sector maps and byte-exact comparisons.
+Manifest verification checks extracted files and metadata-scan hit spools.
 An image hash confirms the read image view, not the USB's original contents.
 """
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -22,27 +24,32 @@ def identity(info):
 
 
 class Image:
-    def __init__(self, path):
+    def __init__(self, path, *, buffering=0):
         raw = os.fspath(path)
-        if raw.startswith(("\\\\.\\", "\\\\?\\")):
+        extended_local_file = os.name == 'nt' and re.match(r'^\\\\\?\\[A-Za-z]:\\', raw)
+        if raw.startswith("\\\\.\\") or (raw.startswith("\\\\?\\") and not extended_local_file):
             raise ValueError("Raw/volume device paths are not accepted; acquire an image first")
         self.path = Path(raw).absolute()
         before = self.path.lstat()
         if not stat.S_ISREG(before.st_mode) or getattr(before, 'st_file_attributes', 0) & 0x400:
             raise ValueError("Expected a regular image, not a device, symlink or reparse point")
         descriptor = os.open(self.path, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0))
-        self.stream = os.fdopen(descriptor, 'rb', buffering=0)
+        self.stream = os.fdopen(descriptor, 'rb', buffering=buffering)
         self.before = self.stream.fileno()
         info = os.fstat(self.before)
-        if not stat.S_ISREG(info.st_mode) or identity(before) != identity(info):
+        self.snapshot = identity(info)
+        self.path_snapshot = identity(before)
+        # Windows can report different ctime values for a path and an open handle.
+        fields = 4 if os.name == 'nt' else len(self.snapshot)
+        if not stat.S_ISREG(info.st_mode) or self.path_snapshot[:fields] != self.snapshot[:fields]:
             self.stream.close()
             raise ValueError("Image identity changed while opening")
-        self.snapshot = identity(info)
         self.size = info.st_size
 
     def unchanged(self):
         try:
-            return self.snapshot == identity(os.fstat(self.before)) == identity(self.path.lstat())
+            return (self.snapshot == identity(os.fstat(self.before))
+                    and self.path_snapshot == identity(self.path.lstat()))
         except OSError:
             return False
 
@@ -217,6 +224,70 @@ def compare(left_path, right_path, chunk_size=1024 * 1024, offset=0,
                     'A sampled window is not a whole-image comparison']}
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def integer(value):
+    return type(value) is int and value >= 0
+
+
+def sha256(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def verify_artifact(manifest, artifact):
+    with Image(artifact, buffering=1024 * 1024) as source:
+        result = verify_open_artifact(manifest, source)
+        require(source.unchanged(), "Evidence artifact changed during verification")
+        return result
+
+
+def verify_open_artifact(manifest, source):
+    require(manifest.get("version") == 1, "Unsupported evidence version")
+    sector = manifest["sector_size"]
+    require(sector in (512, 4096), "Invalid sector size")
+    if manifest.get("kind") == "metadata_scan":
+        start, end = manifest["start_lba"], manifest["end_lba"]
+        require(integer(start) and integer(end) and start < end
+                and manifest["sectors_scanned"] == end - start, "Invalid scan coverage")
+        require(sha256(manifest["scanned_overlay_sha256"]), "Invalid overlay digest")
+        count = 0
+        counts = Counter()
+        digest = hashlib.sha256()
+        while line := source.stream.readline(1538):
+            require(len(line) <= 1537 and line.endswith(b"\n"), "Invalid hit row")
+            digest.update(line)
+            row = json.loads(line)
+            offset = row["byte_offset"]
+            require(row["hit_index"] == count and integer(offset)
+                    and row["lba"] == offset // sector and start <= row["lba"] < end,
+                    "Hit lies outside coverage or order")
+            counts[row["kind"]] += 1
+            count += 1
+        require(count == manifest["hits_count"] and dict(counts) == manifest["counts_by_type"],
+                "Hit counts differ")
+        require(digest.hexdigest() == manifest["hits_sha256"], "Hit spool SHA-256 differs")
+        return {"status": "AUDITED", "kind": "metadata_scan", "hits_count": count,
+                "evidence_id": manifest["evidence_id"], "verified_sha256": digest.hexdigest()}
+    size = manifest["size_bytes"]
+    require(integer(size) and sha256(manifest["sha256_hash"]), "Invalid extraction size or digest")
+    cursor = 0
+    for extent in manifest["source_lba_ranges"]:
+        start, length = extent["source_byte_offset"], extent["length_bytes"]
+        require(integer(start) and integer(length) and length > 0
+                and extent["output_byte_offset"] == cursor
+                and extent["start_lba"] == start // sector
+                and extent["end_lba_exclusive"] == (start + length + sector - 1) // sector,
+                "Invalid provenance extent")
+        cursor += length
+    require(cursor == size == source.size, "Extraction size or provenance coverage differs")
+    digest = hashlib.file_digest(source.stream, "sha256").hexdigest()
+    require(digest == manifest["sha256_hash"], "Extraction SHA-256 differs")
+    return {"status": "AUDITED", "kind": "extraction", "size_bytes": size, "verified_sha256": digest}
+
+
 def exit_code(report):
     if report['status'] in ('READ_ERROR', 'SOURCE_CHANGED'):
         return 1
@@ -247,8 +318,23 @@ def main(argv=None):
         p.add_argument('--chunk-size', type=int, default=1024 * 1024)
         p.add_argument('--run-limit', type=int, default=64)
         p.add_argument('--report', required=True, help='New JSON file; never overwritten')
+    verifier = commands.add_parser('verify-artifact', help='Verify an extraction or metadata scan manifest')
+    verifier.add_argument('manifest', type=Path)
+    verifier.add_argument('artifact', type=Path, help='Extracted file or metadata hit spool')
     args = vars(parser.parse_args(argv))
-    command, destination = args.pop('command'), Path(args.pop('report'))
+    command = args.pop('command')
+    if command == 'verify-artifact':
+        with Image(args['manifest']) as manifest_file:
+            require(manifest_file.size <= 64 * 1024**2, 'Expected a bounded manifest file')
+            encoded = manifest_file.stream.read(64 * 1024**2 + 1)
+            require(len(encoded) == manifest_file.size and manifest_file.unchanged(),
+                    'Manifest changed during verification')
+        try:
+            print(json.dumps(verify_artifact(json.loads(encoded), args['artifact'])))
+        except (AttributeError, KeyError, TypeError) as error:
+            raise ValueError(f'Invalid evidence manifest or hit row: {error}') from error
+        return 0
+    destination = Path(args.pop('report'))
     # Refuse an existing destination before a costly image read. Exclusive create
     # below also covers a link/path race, without ever truncating source evidence.
     if os.path.lexists(destination):

@@ -32,7 +32,7 @@ Read the **[Vietnamese step-by-step recovery guide](docs/recovery-guide.vi.md)**
 for installation, selecting raw source images, diagnosing multiple failure types,
 MP4/MOV box analysis, exact byte-range reconstruction and FFmpeg verification.
 The workbench does not require choosing a failure hypothesis in advance.
-The [version-3 recovery skills](docs/skill-upgrade.vi.md) route 17 case types,
+The [recovery skills](docs/skill-upgrade.vi.md) route 17 case types,
 including USB No Media, reader disagreement, 00/FF-dominant images, zero-hit and
 persistence failures. They include a streaming read-only image audit/comparison
 helper; they do not claim to repair hardware or create bytes missing from a source.
@@ -61,8 +61,9 @@ python scripts/recovery.py triage /path/to/source.img --deep
 python scripts/recovery.py mcp-config --session-root /path/to/persistent-state
 ```
 
-New MCP tools: `diagnose_recovery`, `analyze_video_candidate`. New scan job:
-`ISO_BMFF_BOX_SCAN`. New export mode: `CARVE_BY_BYTE_RANGES`. These add evidence-led
+New MCP tools: `diagnose_recovery`, `analyze_video_candidate`. Scan jobs include
+`ISO_BMFF_BOX_SCAN` and `METADATA_WITHOUT_VBR`. Open a Windows raw-device session
+with `storage_diagnostics: true` to report capacity and write state. New export mode: `CARVE_BY_BYTE_RANGES`. These add evidence-led
 triage and exact extent reconstruction; they do not infer arbitrary fragment order
 or regenerate missing video metadata. See [algorithm provenance](docs/open-source-engines.md).
 
@@ -160,6 +161,25 @@ python ./tests/test_rescue.py
 
 Windows supports image files and physical-drive inspection. CI also exercises image workflows on Ubuntu; raw devices on non-Windows platforms return `NotImplemented`. macOS is not covered by CI. Raw-device extraction and cloning are currently unavailable even on Windows. See [capabilities](docs/engine-capabilities.md).
 
+### 3. Set up Codex and Antigravity
+
+After building the engine, use Python 3.11+ to preview and apply the configuration
+and five bundled skills. Use `--client codex` or `--client antigravity` for one client,
+and `--root PATH` to select a configuration home.
+
+```powershell
+python scripts/setup_clients.py --client both
+python scripts/setup_clients.py --client both --apply
+```
+
+The installer stages changed files, creates backups, replaces each file
+atomically, verifies readback, and rolls back on handled failures.
+Codex uses `.codex/config.toml` and `.agents/skills/` under the selected home.
+With the default home, `CODEX_HOME` can override the Codex config directory.
+Antigravity uses `.gemini/config/mcp_config.json` and `.gemini/config/skills/`.
+An existing unmanaged Codex `resc` entry that differs from the proposed
+settings needs a manual merge.
+
 ---
 
 ## MCP Tools Catalog
@@ -178,13 +198,23 @@ extraction. They do not automatically reconstruct arbitrary fragmented files.
 
 ## Built-in Forensic Skills & Playbooks
 
-`resc` ships with five version-3 skills (inspired by [REA](https://github.com/morluto/rea)). They route by evidence and distinguish implemented operations from external handoffs; use the [capability reference](docs/engine-capabilities.md) and live MCP schema:
+`resc` ships with five version-4.1 skills (inspired by [REA](https://github.com/morluto/rea)). They route by evidence and distinguish implemented operations from external handoffs; use the [capability reference](docs/engine-capabilities.md) and live MCP schema:
 
 * **`disk-forensics/`**: Device/media and reader checks, MBR/GPT and NTFS/FAT boot proposals, acquisition and unbootable-host workflows.
 * **`file-carving-and-defrag/`**: Bounded discovery, heuristic fragment candidates, JPEG/PNG/MP4 validation and external SQLite salvage handoff.
 * **`filesystem-repair/`**: Overlay-only NTFS/FAT proposals and explicit limits for deleted records, exFAT and Ext4.
 * **`mcp-disk-automation/`**: Actual asynchronous job states, cancellation, cursor pagination, quotas and artifact preservation.
 * **`recovery-triage/`**: Seventeen case routes, including No Media, reader disagreement, 00/FF, zero-hit and persistence; regular-image audit/comparison helpers.
+
+For an MBR USB previously formatted outside resc, verify captures made before
+format (T0), after flush (T1), and after reconnect (T2). Supply separate readback
+files for the two canary observations and the expected digest of the original
+canary. The verifier reads regular files and reports which metadata and canary
+bytes agree. The operator supplies the capture provenance.
+
+```powershell
+python scripts/usb_format_verify.py --filesystem exfat --t0 t0.img --t1 t1.img --t2 t2.img --canary-t1 t1.bin --canary-t2 t2.bin --canary-sha256 EXPECTED_SHA256
+```
 
 ---
 

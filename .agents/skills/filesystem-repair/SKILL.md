@@ -2,7 +2,7 @@
 name: filesystem-repair
 description: Kiểm chứng metadata NTFS/FAT32 và sửa thử bằng overlay; định tuyến RAW, mất phân vùng, deleted/format, exFAT/Ext4/mã hóa mà không ghi lên nguồn.
 metadata:
-  version: "3.0"
+  version: "4.1"
 ---
 
 # Sửa thử filesystem theo bằng chứng
@@ -16,6 +16,9 @@ lỗi filesystem. RAW cũng có thể là encryption, sai offset hoặc format c
 2. Xác minh partition start/end, volume identity và proposal; không mặc định start
    2048, backup GPT array 32 sectors, FAT32 backup +6 hay NTFS BPB count luôn gồm
    sector backup. Không chọn tùy tiện giữa hai bản hợp lệ nhưng mâu thuẫn.
+   Nếu mất cả boot chính và dự phòng, chạy `METADATA_WITHOUT_VBR` và đọc hit theo
+   trang. Đối chiếu FAT32 layout suy ra với thêm anchor hoặc bảng FAT. Tên NTFS
+   và cluster exFAT vẫn cần kiểm chứng allocation và nội dung.
 3. Áp dụng proposal được kiểm tra bằng `virtual_patch_and_verify` trong overlay,
    kèm `partition_start_lba`. GPT header phải được tái tạo location/CRC; không
    copy nguyên backup header về primary.

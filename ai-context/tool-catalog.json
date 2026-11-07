@@ -28,6 +28,10 @@
             ],
             "type": "integer"
           },
+          "storage_diagnostics": {
+            "description": "Request Windows raw-device descriptor and write status using a read-only handle",
+            "type": "boolean"
+          },
           "target_path": {
             "type": "string"
           }
@@ -240,7 +244,7 @@
       "name": "scan_filesystem_journals"
     },
     {
-      "description": "Run a cancellable background job. FAT32_DELETED_SCAN inspects deleted SFN entries in a FAT32 root directory; params partition_start_lba required, max_clusters default 256 (1..4096). Bounded candidate evidence, not guaranteed undelete. ISO_BMFF_BOX_SCAN finds plausible ftyp/moov/mdat/moof headers with declared lengths; hits are not validated files or proven fragment matches. SIMD jobs accept start_lba/end_lba (exclusive) or count_sectors. DD_RESCUE_CLONE requires destination_image and optional mapfile; uses native block copying, no resume. FRAGMENT_PREFILTER requires first_fragment_end_lba; optional candidate_start_lba/candidate_end_lba/cluster_sectors. Fragment scores are heuristics, not format validation. Poll returns counts and bounded samples.",
+      "description": "Run a cancellable background job. FAT32_DELETED_SCAN inspects deleted SFN entries in a FAT32 root directory; params partition_start_lba required, max_clusters default 256 (1..4096). Bounded candidate evidence, not guaranteed undelete. ISO_BMFF_BOX_SCAN finds plausible ftyp/moov/mdat/moof headers with declared lengths; hits are not validated files or proven fragment matches. SIMD, ISO_BMFF_BOX_SCAN and METADATA_WITHOUT_VBR jobs accept start_lba/end_lba (exclusive) or count_sectors. Read metadata candidates with read_scan_hits. DD_RESCUE_CLONE requires destination_image and optional mapfile; uses native block copying, no resume. FRAGMENT_PREFILTER requires first_fragment_end_lba; optional candidate_start_lba/candidate_end_lba/cluster_sectors. Fragment scores are heuristics, not format validation. Poll returns counts and bounded samples.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -248,6 +252,7 @@
             "enum": [
               "SIMD_MAGIC_CARVE",
               "SIMD_VBR_HUNT",
+              "METADATA_WITHOUT_VBR",
               "FRAGMENT_PREFILTER",
               "DD_RESCUE_CLONE",
               "ISO_BMFF_BOX_SCAN",

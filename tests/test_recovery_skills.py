@@ -5,11 +5,18 @@ This is a repository check, not an official third-party skill certification.
 import json
 from pathlib import Path
 import re
+import sys
+import tempfile
+import tomllib
 import unittest
+from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / '.agents/skills'
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'scripts'))
+import setup_clients as setup
 
 
 def validate_example(value, schema, path='arguments'):
@@ -85,6 +92,83 @@ class RecoverySkillContracts(unittest.TestCase):
                             validate_example(example['arguments'], tools[example['name']])
                         checked += 1
         self.assertGreaterEqual(checked, 4)
+
+
+class RecoverySkillsTest(unittest.TestCase):
+    def test_versioned_skills_and_links(self):
+        for name in setup.SKILLS:
+            folder = setup.PROJECT / ".agents/skills" / name
+            text = (folder / "SKILL.md").read_text(encoding="utf-8")
+            skill_name = "disk-forensics-and-recovery" if name == "disk-forensics" else name
+            self.assertIn(f"\nname: {skill_name}\n", text)
+            self.assertIn('version: "4.1"', text)
+
+    def test_install_preserves_other_config_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex = root / ".codex/config.toml"
+            antigravity = root / ".gemini/config/mcp_config.json"
+            codex.parent.mkdir()
+            antigravity.parent.mkdir(parents=True)
+            original = '# user comment\n[mcp_servers.other]\ncommand = "other"\n'
+            codex.write_bytes(original.encode())
+            antigravity.write_text('{"keep":true,"mcpServers":{"other":{"command":"other"}}}', encoding="utf-8")
+            server = {"command": "node", "args": ["resc-mcp.js"]}
+            changes = setup.plan(root, "both", server)
+            self.assertFalse((root / ".agents").exists())
+            setup.publish(changes)
+            self.assertTrue(codex.read_text(encoding="utf-8").startswith(original))
+            self.assertEqual(tomllib.loads(codex.read_text())["mcp_servers"]["resc"]["tool_timeout_sec"], 120)
+            config = json.loads(antigravity.read_text(encoding="utf-8"))
+            self.assertTrue(config["keep"])
+            self.assertEqual(config["mcpServers"]["other"], {"command": "other"})
+            self.assertEqual(config["mcpServers"]["resc"], server)
+            self.assertEqual(setup.plan(root, "both", server), [])
+            self.assertEqual(len(list(codex.parent.glob("config.toml.backup.*"))), 1)
+            self.assertTrue((root / ".gemini/config/skills/recovery-triage/references"
+                             / "rea-binary-and-ioctl-analysis.md").is_file())
+            installed = root / ".gemini/config/skills/recovery-triage/SKILL.md"
+            self.assertIn((ROOT / "docs/engine-capabilities.md").as_uri(),
+                          installed.read_text(encoding="utf-8"))
+            new_server = {"command": "other-node", "args": ["resc-mcp.js"]}
+            setup.publish(setup.plan(root, "both", new_server))
+            self.assertEqual(setup.plan(root, "both", new_server), [])
+
+    def test_rollback_and_concurrent_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "first", root / "second"
+            first.write_bytes(b"old")
+            second.write_bytes(b"original")
+            changes = [setup.Change(first, setup.snapshot(first), b"updated"),
+                       setup.Change(second, setup.snapshot(second), b"replacement")]
+            second.write_bytes(b"edited concurrently")
+            with self.assertRaisesRegex(ValueError, "Destination changed"):
+                setup.publish(changes)
+            self.assertEqual(first.read_bytes(), b"old")
+            self.assertEqual(second.read_bytes(), b"edited concurrently")
+            self.assertEqual(list(root.glob(".resc-*")), [])
+            self.assertEqual(next(root.glob("first.backup.*")).read_bytes(), b"old")
+
+    def test_readback_failure_rolls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "new"
+            original = setup.snapshot
+            calls = 0
+
+            def snapshot(target):
+                nonlocal calls
+                result = original(target)
+                if target == path and result:
+                    calls += 1
+                    if calls == 1:
+                        return setup.Snapshot(b"bad readback", result.mode, result.identity, result.mtime)
+                return result
+
+            with patch.object(setup, "snapshot", side_effect=snapshot):
+                with self.assertRaisesRegex(ValueError, "Readback failed"):
+                    setup.publish([setup.Change(path, None, b"new")])
+            self.assertFalse(path.exists())
 
 
 if __name__ == '__main__':

@@ -24,8 +24,30 @@ pub struct PhysicalDrive {
     file: File,
     pub sector_size: u32,
     pub disk_size_bytes: u64,
+    #[cfg(windows)]
+    device_geometry: Option<DeviceGeometry>,
     bad: Mutex<BadSectorMap>,
 }
+
+#[cfg(windows)]
+#[derive(serde::Serialize)]
+struct DeviceGeometry {
+    sector_size: u32,
+    geometry_length_bytes: Option<u64>,
+    length_info_bytes: Option<u64>,
+    length_info_status: &'static str,
+    length_info_error: Option<i32>,
+}
+
+#[cfg(windows)]
+impl DeviceGeometry {
+    fn capacity(&self) -> io::Result<u64> {
+        self.length_info_bytes
+            .or(self.geometry_length_bytes)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid device length"))
+    }
+}
+
 impl PhysicalDrive {
     pub fn open(number: u32) -> io::Result<Self> {
         Self::open_path(&format!(r"\\.\PhysicalDrive{number}"))
@@ -33,22 +55,6 @@ impl PhysicalDrive {
     #[cfg(windows)]
     pub fn open_path(path: &str) -> io::Result<Self> {
         let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
-        let metadata_handle = unsafe {
-            CreateFileW(
-                wide.as_ptr(),
-                GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                0,
-                std::ptr::null_mut(),
-            )
-        };
-        if metadata_handle == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
-        }
-        let metadata_file = unsafe { File::from_raw_handle(metadata_handle as _) };
-        let (sector_size, length) = Self::geometry(&metadata_file)?;
         let handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
@@ -64,7 +70,10 @@ impl PhysicalDrive {
             return Err(io::Error::last_os_error());
         }
         let file = unsafe { File::from_raw_handle(handle as _) };
-        Self::from_file(file, sector_size, length)
+        let geometry = Self::geometry(&file)?;
+        let mut drive = Self::from_file(file, geometry.sector_size, geometry.capacity()?)?;
+        drive.device_geometry = Some(geometry);
+        Ok(drive)
     }
     #[cfg(not(windows))]
     pub fn open_path(_: &str) -> io::Result<Self> {
@@ -102,53 +111,155 @@ impl PhysicalDrive {
             file,
             sector_size,
             disk_size_bytes: length,
+            #[cfg(windows)]
+            device_geometry: None,
             bad: Mutex::new(BadSectorMap::new()),
         })
     }
     #[cfg(windows)]
-    fn geometry(file: &File) -> io::Result<(u32, u64)> {
-        use windows_sys::Win32::System::Ioctl::IOCTL_DISK_GET_DRIVE_GEOMETRY_EX;
-        #[repr(C)]
-        struct Geometry {
-            cylinders: i64,
-            media: u32,
-            tracks: u32,
-            sectors: u32,
-            bytes: u32,
-            length: i64,
-            data: [u8; 256],
-        }
-        let mut geometry = std::mem::MaybeUninit::<Geometry>::zeroed();
-        let mut returned = 0;
-        if unsafe {
-            DeviceIoControl(
-                file.as_raw_handle() as _,
-                IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
-                std::ptr::null(),
-                0,
-                geometry.as_mut_ptr().cast(),
-                std::mem::size_of::<Geometry>() as u32,
-                &mut returned,
-                std::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        if returned < 32 {
+    fn geometry(file: &File) -> io::Result<DeviceGeometry> {
+        use windows_sys::Win32::System::Ioctl::{
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_LENGTH_INFO,
+        };
+        let mut geometry = [0u8; 288];
+        let size = Self::control(
+            file,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+            std::ptr::null(),
+            0,
+            &mut geometry,
+        )?;
+        if size < 32 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Truncated disk geometry",
             ));
         }
-        let geometry = unsafe { geometry.assume_init() };
-        if geometry.length <= 0 {
+        // DISK_GEOMETRY_EX contains the 24-byte DISK_GEOMETRY followed by DiskSize.
+        let sector_size = u32::from_le_bytes(geometry[20..24].try_into().unwrap());
+        let geometry_length = i64::from_le_bytes(geometry[24..32].try_into().unwrap());
+        let mut buffer = [0u8; 8];
+        let length = Self::control(
+            file,
+            IOCTL_DISK_GET_LENGTH_INFO,
+            std::ptr::null(),
+            0,
+            &mut buffer,
+        );
+        let (length_info_bytes, length_info_status, length_info_error) = match length {
+            Ok(8) if i64::from_le_bytes(buffer) > 0 => {
+                (Some(u64::from_le_bytes(buffer)), "reported", None)
+            }
+            Ok(_) => (None, "invalid_response", None),
+            Err(error) => (None, "unavailable", error.raw_os_error()),
+        };
+        Ok(DeviceGeometry {
+            sector_size,
+            geometry_length_bytes: (geometry_length > 0).then_some(geometry_length as u64),
+            length_info_bytes,
+            length_info_status,
+            length_info_error,
+        })
+    }
+
+    #[cfg(windows)]
+    pub fn query_usb_storage_health(&self) -> io::Result<serde_json::Value> {
+        use windows_sys::Win32::System::Ioctl::{
+            PropertyStandardQuery, StorageDeviceProperty, IOCTL_DISK_IS_WRITABLE,
+            IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
+        };
+        let geometry = self.device_geometry.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Storage diagnostics require a physical device",
+            )
+        })?;
+        let query = STORAGE_PROPERTY_QUERY {
+            PropertyId: StorageDeviceProperty,
+            QueryType: PropertyStandardQuery,
+            AdditionalParameters: [0],
+        };
+        let mut buffer = [0u8; 4096];
+        let descriptor = Self::control(
+            &self.file,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            std::ptr::from_ref(&query).cast(),
+            std::mem::size_of_val(&query) as u32,
+            &mut buffer,
+        );
+        let descriptor = match descriptor {
+            Ok(size) => storage_descriptor(&buffer[..size]),
+            Err(error) => {
+                serde_json::json!({"win32_error": error.raw_os_error(), "status": error.kind().to_string()})
+            }
+        };
+        let write_state = match Self::control(
+            &self.file,
+            IOCTL_DISK_IS_WRITABLE,
+            std::ptr::null(),
+            0,
+            &mut [],
+        ) {
+            Ok(_) => serde_json::json!({"status": "writable"}),
+            Err(error) if error.raw_os_error() == Some(ERROR_WRITE_PROTECT as i32) => {
+                serde_json::json!({"status": "write_protected"})
+            }
+            Err(error) => {
+                serde_json::json!({"status": "unknown", "win32_error": error.raw_os_error()})
+            }
+        };
+        Ok(serde_json::json!({
+            "geometry": geometry,
+            "capacity_bytes": self.disk_size_bytes,
+            "device_descriptor": descriptor,
+            "windows_write_state": write_state,
+            "scsi_pass_through": {"status": "unavailable", "reason": "Windows requires read/write handle access"},
+            "limitations": ["Windows write state does not identify the protection layer", "Controller and NAND health are unverified"]
+        }))
+    }
+
+    #[cfg(not(windows))]
+    pub fn query_usb_storage_health(&self) -> io::Result<serde_json::Value> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Storage diagnostics require Windows",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn control(
+        file: &File,
+        code: u32,
+        input: *const std::ffi::c_void,
+        input_size: u32,
+        output: &mut [u8],
+    ) -> io::Result<usize> {
+        let mut request = OverlappedRequest::new()?;
+        let output_ptr = if output.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            output.as_mut_ptr().cast()
+        };
+        let success = unsafe {
+            DeviceIoControl(
+                file.as_raw_handle() as _,
+                code,
+                input,
+                input_size,
+                output_ptr,
+                output.len() as u32,
+                std::ptr::null_mut(),
+                &mut request.request,
+            )
+        };
+        let size = request.complete(file, success, None)? as usize;
+        if size > output.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "Invalid device length",
+                "Invalid device control response size",
             ));
         }
-        Ok((geometry.bytes, geometry.length as u64))
+        Ok(size)
     }
     pub fn total_sectors(&self) -> u64 {
         self.disk_size_bytes / self.sector_size as u64
@@ -222,70 +333,19 @@ impl PhysicalDrive {
         buf: &mut [u8],
         cancel: Option<&AtomicBool>,
     ) -> io::Result<()> {
-        struct Event(HANDLE);
-        impl Drop for Event {
-            fn drop(&mut self) {
-                unsafe { CloseHandle(self.0) };
-            }
-        }
-        let event = Event(unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) });
-        if event.0.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let mut request: OVERLAPPED = unsafe { std::mem::zeroed() };
-        request.Anonymous.Anonymous.Offset = offset as u32;
-        request.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
-        request.hEvent = event.0;
-        let handle = self.file.as_raw_handle() as _;
-        let mut transferred = 0;
-        let started = Instant::now();
+        let mut request = OverlappedRequest::new()?;
+        request.request.Anonymous.Anonymous.Offset = offset as u32;
+        request.request.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
         let success = unsafe {
             ReadFile(
-                handle,
+                self.file.as_raw_handle() as _,
                 buf.as_mut_ptr(),
                 buf.len() as u32,
                 std::ptr::null_mut(),
-                &mut request,
+                &mut request.request,
             )
         };
-        if success == 0 && unsafe { GetLastError() } != ERROR_IO_PENDING {
-            return Err(io::Error::last_os_error());
-        }
-        loop {
-            let reason = if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-                Some(io::ErrorKind::Interrupted)
-            } else if started.elapsed() >= READ_TIMEOUT {
-                Some(io::ErrorKind::TimedOut)
-            } else {
-                None
-            };
-            if let Some(reason) = reason {
-                unsafe { CancelIoEx(handle, &request) };
-                // Cancellation is asynchronous. Releasing the stack OVERLAPPED or
-                // buffer before completion would be a use-after-free in the driver.
-                unsafe { GetOverlappedResult(handle, &request, &mut transferred, 1) };
-                return Err(io::Error::new(
-                    reason,
-                    "Kernel read cancelled (driver completion drained)",
-                ));
-            }
-            let wait = unsafe { WaitForSingleObject(event.0, 10) };
-            if wait == WAIT_OBJECT_0 {
-                break;
-            }
-            if wait != WAIT_TIMEOUT {
-                let error = io::Error::last_os_error();
-                unsafe {
-                    CancelIoEx(handle, &request);
-                    GetOverlappedResult(handle, &request, &mut transferred, 1)
-                };
-                return Err(error);
-            }
-        }
-        if unsafe { GetOverlappedResult(handle, &request, &mut transferred, 0) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if transferred as usize != buf.len() {
+        if request.complete(&self.file, success, cancel)? as usize != buf.len() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "Short overlapped read",
@@ -293,6 +353,104 @@ impl PhysicalDrive {
         }
         Ok(())
     }
+}
+
+#[cfg(windows)]
+struct OverlappedRequest {
+    request: OVERLAPPED,
+    started: Instant,
+}
+
+#[cfg(windows)]
+impl OverlappedRequest {
+    fn new() -> io::Result<Self> {
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let mut request: OVERLAPPED = unsafe { std::mem::zeroed() };
+        request.hEvent = event;
+        Ok(Self {
+            request,
+            started: Instant::now(),
+        })
+    }
+
+    fn complete(&self, file: &File, success: i32, cancel: Option<&AtomicBool>) -> io::Result<u32> {
+        if success == 0 && unsafe { GetLastError() } != ERROR_IO_PENDING {
+            return Err(io::Error::last_os_error());
+        }
+        let handle = file.as_raw_handle() as _;
+        let request = &self.request;
+        let mut transferred = 0;
+        loop {
+            let reason = if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                Some(io::ErrorKind::Interrupted)
+            } else if self.started.elapsed() >= READ_TIMEOUT {
+                Some(io::ErrorKind::TimedOut)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                unsafe { CancelIoEx(handle, request) };
+                // Cancellation is asynchronous. Releasing the stack OVERLAPPED or
+                // buffer before completion would be a use-after-free in the driver.
+                unsafe { GetOverlappedResult(handle, request, &mut transferred, 1) };
+                return Err(io::Error::new(
+                    reason,
+                    "Kernel read cancelled (driver completion drained)",
+                ));
+            }
+            let wait = unsafe { WaitForSingleObject(request.hEvent, 10) };
+            if wait == WAIT_OBJECT_0 {
+                break;
+            }
+            if wait != WAIT_TIMEOUT {
+                let error = io::Error::last_os_error();
+                unsafe {
+                    CancelIoEx(handle, request);
+                    GetOverlappedResult(handle, request, &mut transferred, 1)
+                };
+                return Err(error);
+            }
+        }
+        if unsafe { GetOverlappedResult(handle, request, &mut transferred, 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(transferred)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for OverlappedRequest {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.request.hEvent) };
+    }
+}
+
+#[cfg(windows)]
+fn storage_descriptor(data: &[u8]) -> serde_json::Value {
+    use serde_json::json;
+    if data.len() < 36 {
+        return json!({"status": "truncated"});
+    }
+    let field = |offset| u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+    let declared = field(4) as usize;
+    if declared < 36 || declared > data.len() {
+        return json!({"status": "invalid_descriptor_size", "declared_bytes": declared});
+    }
+    let string = |offset| {
+        let start = field(offset) as usize;
+        if start < 36 || start >= declared {
+            return None;
+        }
+        let bytes = &data[start..declared.min(start + 129)];
+        let end = bytes.iter().position(|&b| b == 0)?;
+        let value = std::str::from_utf8(&bytes[..end]).ok()?.trim();
+        (!value.is_empty() && !value.chars().any(char::is_control)).then_some(value)
+    };
+    json!({"status": "ok", "bus_type": field(28), "removable_media": data[10] != 0,
+        "vendor": string(12), "product": string(16), "revision": string(20)})
 }
 impl RawStorageReader for PhysicalDrive {
     fn len_bytes(&self) -> io::Result<u64> {

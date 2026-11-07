@@ -389,6 +389,9 @@ impl DiskForensicsServer {
             "Invalid source path"
         );
         let result = tokio::task::spawn_blocking(move || -> Result<_> {
+            let mut storage_diagnostics = params.storage_diagnostics.then(|| {
+                json!({"status":"unavailable","reason":"Storage diagnostics require a Windows raw device"})
+            });
             let lower = path.to_ascii_lowercase();
             let physical_prefix = r"\\.\physicaldrive";
             let reader: Box<dyn RawStorageReader + Send>;
@@ -406,6 +409,9 @@ impl DiskForensicsServer {
                 );
                 let number: u32 = digits.parse()?;
                 let drive = core_io::PhysicalDrive::open(number)?;
+                if params.storage_diagnostics {
+                    storage_diagnostics = Some(drive.query_usb_storage_health()?);
+                }
                 sector_size = drive.sector_size;
                 canonical = format!(r"\\.\PhysicalDrive{number}");
                 reader = Box::new(drive);
@@ -428,6 +434,9 @@ impl DiskForensicsServer {
                     "Unsupported raw device path; use PhysicalDrive<N> or a volume letter"
                 );
                 let drive = core_io::PhysicalDrive::open_path(&volume)?;
+                if params.storage_diagnostics {
+                    storage_diagnostics = Some(drive.query_usb_storage_health()?);
+                }
                 sector_size = drive.sector_size;
                 canonical = volume;
                 reader = Box::new(drive);
@@ -473,10 +482,11 @@ impl DiskForensicsServer {
                 overlay.len_bytes() % sector_size as u64 == 0,
                 "Image size does not match sector geometry"
             );
-            Ok((overlay, sector_size, canonical, session_id, session_dir))
+            Ok((overlay, sector_size, canonical, session_id, session_dir, storage_diagnostics))
         })
         .await??;
-        let (overlay, sector_size, target_path, session_id, session_dir) = result;
+        let (overlay, sector_size, target_path, session_id, session_dir, storage_diagnostics) =
+            result;
         let total_sectors = overlay.len_bytes() / sector_size as u64;
         let session = Arc::new(RecoverySession {
             session_id: session_id.clone(),
@@ -491,9 +501,11 @@ impl DiskForensicsServer {
             .await
             .insert(session_id.clone(), session);
         *self.default_session_id.lock().await = Some(session_id.clone());
-        Ok(
-            json!({"session_id":session_id,"target_path":target_path,"total_sectors":total_sectors,"sector_size":sector_size,"lba_unit_bytes":sector_size,"status":"OPENED_READ_ONLY","length_bytes":total_sectors*sector_size as u64,"session_dir":session_dir}),
-        )
+        let mut response = json!({"session_id":session_id,"target_path":target_path,"total_sectors":total_sectors,"sector_size":sector_size,"lba_unit_bytes":sector_size,"status":"OPENED_READ_ONLY","length_bytes":total_sectors*sector_size as u64,"session_dir":session_dir});
+        if let Some(diagnostics) = storage_diagnostics {
+            response["storage_diagnostics"] = diagnostics;
+        }
+        Ok(response)
     }
 
     async fn handle_partition_recovery(&self, args: &Value) -> Result<Value> {
