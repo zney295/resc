@@ -1,3 +1,15 @@
+# resc — MCP data recovery engine and AI recovery skills
+
+**resc is an open-source, read-only disk-image recovery toolkit for MCP-compatible AI assistants.**
+It combines a Rust JSON-RPC engine, Python command-line tools and five recovery skills
+for Codex and Antigravity/Gemini. It inspects disk images, tests filesystem repairs
+in a durable virtual overlay, and exports supported files with SHA-256 provenance.
+
+**Tiếng Việt:** Bộ skill cứu dữ liệu cho AI: chẩn đoán ảnh đĩa USB/SSD/HDD,
+thử sửa metadata trong overlay và xuất file NTFS/FAT vào vị trí riêng.
+
+[What resc does and FAQ](docs/discover-resc.md) · [Download Windows toolkit](https://github.com/zney295/resc/releases/latest) · [Installation guide](docs/recovery-guide.vi.md) · [Current capabilities](docs/engine-capabilities.md)
+
 > **Implementation status:** See [implemented capabilities and limitations](docs/engine-capabilities.md)
 > for the hardened engine's actual behavior: 512/4096-byte sectors, durable overlay WAL,
 > asynchronous extraction, paginated hits and SHA-256 provenance manifests. Native NTFS/FAT reads use the overlay;
@@ -6,7 +18,7 @@
 
 <div align="center">
 
-# 🛡️ resc
+## 🛡️ resc
 **Low-Level Disk Forensics & Data Recovery MCP Engine in Rust**
 
 [![Rust](https://img.shields.io/badge/Built_with-Rust_&_SIMD-orange?logo=rust)](https://www.rust-lang.org/)
