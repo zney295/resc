@@ -3,6 +3,17 @@
 The live `tools/list` schema and this document describe the implemented engine.
 Older architectural examples and forensic playbooks may describe unsupported work.
 
+## Reviewed Python diagnostics and unified CLI
+
+See [the v5 integration review](v5-integration-review.vi.md) for scope and tests.
+`resc_cli.py` routes header inspection, read-only driver inventory, native overlay
+repair/extraction, audit and the existing guarded USB lab. `install.py` previews
+or installs client configuration, all five skills and their Python runtime scripts.
+The Node launcher prefers Rust; `RESC_BACKEND=python` selects a limited diagnostic
+server advertising only `inspect_disk_headers`. This is not native WAL/session/job
+compatibility. Without a binary, `recovery.py triage` returns partial header evidence
+and exit 2. Native recovery, source-write prohibitions and output guards remain in force.
+
 ## Linux Live and two-computer acquisition CLI
 
 `scripts/rescue.py` is a separate stdlib acquisition CLI, not an MCP endpoint.

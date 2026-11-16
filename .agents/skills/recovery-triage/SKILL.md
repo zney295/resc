@@ -58,8 +58,10 @@ báo cáo không xác nhận hash, reader, 15 GB đã đọc hay số test trên
    kiểm manifest, size, format/decoder và nội dung. Giữ output một phần, WAL/map/
    commit artifacts. Không quét lại nguồn chỉ vì trang hit đầu trống.
 9. **USB dùng lại:** chỉ sau khi bảo toàn dữ liệu, đi nhánh
-   [persistence/capacity lab](references/persistence-lab.md). Nâng cấp skill không
-   cho phép tự ghi dữ liệu thử, format, flash firmware hay F3 lên USB của người dùng.
+   [persistence/capacity lab](references/persistence-lab.md). Pha B dùng CLI
+   `usb_format_verify.py format` hoặc `write-canary` sau khi người dùng đã xác nhận
+   đúng serial/dung lượng/thiết bị từ preview và chấp nhận mất dữ liệu khi format.
+   Mã xác nhận của preview ràng buộc thiết bị, không thay cho sự đồng ý của người dùng.
    Nếu người vận hành đã thu các ảnh T0/T1/T2 và tệp canary, dùng
    `scripts/usb_format_verify.py` để đối chiếu MBR, boot và hash đã cung cấp.
 10. Báo [kết quả/handoff](references/report-and-handoff.md): số file thực sự lấy

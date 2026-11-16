@@ -98,7 +98,17 @@ not direct remote-block acquisition into the destination computer. Ordinary USB
 cables do not expose another computer's internal SSD. Never claim failing hardware,
 SSH authentication, WinPE or a bootable ISO was validated by synthetic tests.
 
-## Development
+## Explicit USB reuse phase
+
+`scripts/usb_format_verify.py format --drive D: --filesystem exfat` previews a
+separate destructive reuse operation. `write-canary --drive D:` previews canary
+creation. After the user approves the exact device identity and data loss,
+execution requires the preview's `--confirm` token and, for format,
+`--data-loss-accepted`. Never infer device-level approval from a software-upgrade
+request or generate approval on behalf of the user. The read-only recovery engine
+and overlay path remain separate. See the persistence lab for the procedure.
+
+## Development checks
 
 Use Rust stable, Node >=18 and Python >=3.11. Build with panic=unwind; never set
 panic=abort. The repository's release profile already selects the correct mode.

@@ -16,6 +16,8 @@
 
 *Use an MCP agent to inspect disk images and test recovery patches in a virtual overlay.*
 
+Reviewed v5 additions: [unified CLI, installer, header/driver diagnostics and limitations](docs/v5-integration-review.vi.md).
+
 [Architecture](#hybrid-brain--muscle-architecture) • [Safety Guarantee](#safety-architecture-in-memory-virtual-overlay) • [Quick Start](#quick-start) • [MCP Tools](#mcp-tools-catalog) • [Forensic Playbooks](#built-in-forensic-skills--playbooks)
 
 </div>
@@ -211,6 +213,16 @@ format (T0), after flush (T1), and after reconnect (T2). Supply separate readbac
 files for the two canary observations and the expected digest of the original
 canary. The verifier reads regular files and reports which metadata and canary
 bytes agree. The operator supplies the capture provenance.
+
+Windows USB reuse has a separate preview-first execution path:
+`python scripts/usb_format_verify.py format --drive D: --filesystem exfat`
+or `python scripts/usb_format_verify.py write-canary --drive D:`. After approving
+the displayed device identity, pass its `--confirm` token. Formatting additionally
+requires `--data-loss-accepted` and erases the entire selected disk. Both commands
+enforce USB/system/pagefile guards and require Administrator for execution.
+Formatting automatically writes four 1 MiB canary files and checks their SHA-256
+after flush. External audit manifests are stored under `%LOCALAPPDATA%/resc/usb-lab`.
+Reconnect verification and full-capacity testing remain separate observations.
 
 ```powershell
 python scripts/usb_format_verify.py --filesystem exfat --t0 t0.img --t1 t1.img --t2 t2.img --canary-t1 t1.bin --canary-t2 t2.bin --canary-sha256 EXPECTED_SHA256

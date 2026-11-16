@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import stat
 import struct
+import sys
 
 
 def require(condition, message):
@@ -155,6 +156,10 @@ def verify(images, canaries, expected_hash, sector_size, filesystem):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("format", "write-canary"):
+        from usb_lab import main as lab_main
+        lab_main()
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     for stage in ("t0", "t1", "t2", "canary-t1", "canary-t2"):
         parser.add_argument(f"--{stage}", type=Path, required=True)

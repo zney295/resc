@@ -131,7 +131,7 @@ checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "core-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "serde",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "disk-parsers"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aho-corasick",
  "bytemuck",
@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "external-bridges"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "core-io",

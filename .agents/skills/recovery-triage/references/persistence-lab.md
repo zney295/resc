@@ -1,11 +1,30 @@
 # Persistence/capacity: lấy dữ liệu khác với sửa thiết bị dùng lại
 
-Đây là **protocol lab**, không phải tính năng ghi/repair đã có trong resc. Bắt
+Đây là **protocol lab** với CLI Pha B riêng cho USB Windows. Bắt
 đầu bằng bảo toàn dữ liệu. Yêu cầu "nâng cấp skill" hoặc "cứu file" không tự cấp
 quyền format, F3/MPTool hay ghi mẫu lên thiết bị cần cứu. Nếu chưa có quyền ghi
 trên media xác định thì chỉ chuẩn bị kế hoạch và đọc các bằng chứng đã có.
 
 ## Trước lab có ghi
+
+### CLI thực thi có xác nhận
+
+Chạy preview `python scripts/usb_format_verify.py format --drive D: --filesystem exfat`.
+Đối chiếu số disk, serial, UniqueId, dung lượng và volume với thiết bị người dùng
+đã cho phép xóa. Sau xác nhận đó, chạy lại cùng lệnh kèm `--confirm TOKEN`
+và `--data-loss-accepted`. CLI yêu cầu quyền Administrator, chặn Disk 0, C:,
+Boot/System/Pagefile, ổ không phải USB và mọi trường hợp không xác minh được.
+FAT32 giới hạn 32 GiB, MBR giới hạn 2 TiB trong lệnh này.
+
+Lệnh format tạo MBR, một phân vùng rồi tự ghi bốn tệp mẫu 1 MiB. Có thể dùng
+`python scripts/usb_format_verify.py write-canary --drive D:` để xem trước việc
+ghi mẫu trên USB đã định dạng, sau đó thêm `--confirm TOKEN` khi được chấp thuận.
+Mỗi tệp có dữ liệu ngẫu nhiên không chứa 00/FF, được flush và đọc lại đối chiếu
+SHA-256. Manifest có bản trên USB và bản độc lập tại `%LOCALAPPDATA%/resc/usb-lab`.
+Lỗi sau khi bắt đầu ghi để lại trạng thái FAILED_PARTIAL, không tự thử format lại.
+T1 thành công trả `T1_VERIFIED_T2_PENDING`. Bốn tệp là bốn vùng logic, không
+chứng minh bốn LBA vật lý hoặc toàn bộ dung lượng. Cần tháo an toàn, cắm lại và
+đọc đối chiếu với manifest ngoài USB để xác minh T2.
 
 Ghi chính xác device identity/serial/capacity, mục tiêu (recovery hay reuse), tình
 trạng backup/hash/map, những gì chưa lấy được, ảnh nguồn bảo quản và output ổ
@@ -53,5 +72,5 @@ file nhỏ. Một test qua trên phạm vi nhỏ chưa xác minh dung lượng q
 
 Tham khảo: [Microsoft file buffering](https://learn.microsoft.com/en-us/windows/win32/fileio/file-buffering),
 [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers),
-[F3](https://github.com/AltraMayor/f3). Đây là tài liệu phương pháp; repo không
-đóng gói các công cụ lab ghi hoặc đã thực hiện test persistence trên USB của bạn.
+[F3](https://github.com/AltraMayor/f3). Kiểm thử mô phỏng của CLI Pha B không
+thay cho kết quả persistence đo trên USB cụ thể.

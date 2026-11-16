@@ -40,6 +40,9 @@ jobs:
       - name: Lint Rust
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Check Rust Formatting
+        run: cargo fmt --all -- --check
+
       - name: Run Unit Tests
         run: cargo test --workspace --locked
 
@@ -85,3 +88,8 @@ jobs:
         run: |
           node bin/resc-mcp.js --help
           node bin/resc-mcp.js --version
+
+      - name: Test Unified CLI, Installer and USB Guards
+        run: |
+          python tests/test_upgrade_integration.py
+          python tests/test_usb_lab.py

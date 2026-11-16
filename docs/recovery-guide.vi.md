@@ -15,6 +15,11 @@ rescue.py tạo ảnh bằng GNU ddrescue và chuyển ảnh đã seal; phần d
 
 ## 1. Cài đặt và kiểm tra
 
+CLI/cài đặt thống nhất mới: `python scripts/install.py --client both` xem trước,
+thêm `--apply` để cài; `python scripts/resc_cli.py doctor` kiểm tra môi trường.
+Không có Rust vẫn dùng header/driver/audit và MCP Python diagnostics giới hạn;
+cứu file và overlay cần native engine. Xem [phạm vi tích hợp v5](v5-integration-review.vi.md).
+
 Cần Rust **stable hiện hành**, trình liên kết C, Node.js >=18, Python >=3.11.
 Python không cần pip; Node launcher không cần npm install. Cargo dùng `Cargo.lock`.
 Một số tài liệu cũ ghi Rust 1.80 và panic=abort: không dùng các chỉ dẫn đó.

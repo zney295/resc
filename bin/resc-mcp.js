@@ -41,17 +41,32 @@ function findBinary() {
 }
 
 function run() {
-  let binaryPath = findBinary();
+  const backend = process.env.RESC_BACKEND || 'auto';
+  if (!['auto', 'native', 'python'].includes(backend)) {
+    console.error('RESC_BACKEND must be auto, native or python');
+    process.exit(1);
+  }
+  const configured = process.env.RESC_MCP_BIN || process.env.RECOVERYAI_MCP_BIN;
+  if (backend !== 'python' && configured && !fs.existsSync(configured)) {
+    console.error('Configured MCP binary does not exist');
+    process.exit(1);
+  }
+  let binaryPath = backend === 'python' ? null : findBinary();
+  let prefixArgs = [];
 
   if (!binaryPath) {
-    console.error('[resc] NotImplemented: automatic execution of unverified downloads is disabled.');
-    console.error('Build locally with cargo build --release or set RESC_MCP_BIN to a trusted binary.');
-    process.exit(1);
+    if (backend === 'native') {
+      console.error('Native engine unavailable. Build with cargo build --release --locked.');
+      process.exit(1);
+    }
+    binaryPath = process.env.RESC_PYTHON || (isWindows ? 'python' : 'python3');
+    prefixArgs = [path.resolve(__dirname, '..', 'scripts', 'mcp_server_engine.py')];
+    console.error('[resc] Limited Python diagnostics: no sessions, overlay repairs or extraction.');
   }
 
   const userArgs = process.argv.slice(2);
 
-  const child = spawn(binaryPath, userArgs, {
+  const child = spawn(binaryPath, [...prefixArgs, ...userArgs], {
     stdio: ['pipe', 'pipe', 'inherit'],
     env: {
       ...process.env,

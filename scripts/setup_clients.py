@@ -15,6 +15,10 @@ import uuid
 PROJECT = Path(__file__).resolve().parents[1]
 SKILLS = ("recovery-triage", "disk-forensics", "filesystem-repair",
           "file-carving-and-defrag", "mcp-disk-automation")
+RUNTIME_FILES = ("disk_header_inspector.py", "driver_and_device_manager.py",
+                 "format_recovery_engine.py", "resc_cli.py", "recovery.py",
+                 "evidence_audit.py", "rescue.py", "usb_format_verify.py",
+                 "usb_lab.py", "usb_lab.ps1", "mcp_server_engine.py")
 BEGIN = "# BEGIN resc managed MCP"
 END = "# END resc managed MCP"
 
@@ -71,12 +75,14 @@ def skill_files(directory_path):
     for path in sorted(directory_path.iterdir()):
         if stat.S_ISDIR(safe_stat(path).st_mode):
             yield from skill_files(path)
-        elif path.suffix == ".md":
+        elif path.suffix in {".md", ".py"}:
             yield path, snapshot(path).data
 
 
 def installed_skill_content(path, data):
     """Keep repository documentation links usable from an installed skill."""
+    if path.suffix != ".md":
+        return data
     def documentation_link(match):
         link = urlsplit(match[1])
         if link.scheme or link.netloc or not link.path:
@@ -165,12 +171,18 @@ def plan(root, client, server, codex_dir=None):
             for path, data in skill_files(source):
                 destination = skills / skill / path.relative_to(source)
                 changes.append(Change(destination, snapshot(destination), installed_skill_content(path, data)))
+        for filename in RUNTIME_FILES:
+            source = PROJECT / "scripts" / filename
+            destination = skills / "recovery-triage/scripts" / filename
+            changes.append(Change(destination, snapshot(destination), snapshot(source).data))
     return [change for change in changes if not change.before or change.before.data != change.data]
 
 
 def stage(path, data, mode=None):
     directory(path.parent, create=True)
-    fd, temporary = tempfile.mkstemp(prefix=".resc-", dir=path.parent)
+    # Windows derives executable mode bits from extensions (.cmd/.exe).
+    # Keep the suffix so staged and published snapshots have identical modes.
+    fd, temporary = tempfile.mkstemp(prefix=".resc-", suffix=path.suffix, dir=path.parent)
     temporary = Path(temporary)
     try:
         with os.fdopen(fd, "wb") as stream:

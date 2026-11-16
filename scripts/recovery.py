@@ -289,6 +289,21 @@ def main(argv=None):
         acquisition = acquisition_evidence(args.acquisition_manifest, source) if getattr(args, "acquisition_manifest", None) else None
         if acquisition and acquisition["sector_size"] not in (None, args.sector_size):
             raise ValueError("sector-size không khớp acquisition geometry")
+        if args.command == "triage" and not Path(args.binary).is_file():
+            from disk_header_inspector import inspect_disk_headers
+            from mcp_server_engine import compact
+            report = {"status": "LIMITED_PYTHON_DIAGNOSTICS", "source": str(source),
+                      "diagnosis": compact(inspect_disk_headers(str(source), args.sector_size)),
+                      "analysis_failures": 1,
+                      "unavailable": "Native sessions, partition repair analysis and scan jobs require Rust. No scans were run."}
+            if acquisition:
+                report["acquisition"] = acquisition
+            rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+            if args.report:
+                with Path(args.report).open("x", encoding="utf-8") as stream:
+                    stream.write(rendered)
+            print(rendered, end="")
+            return 2
         client = Client(args.binary)
         try:
             opened = client.call("open_recovery_session", {"target_path": str(source), "sector_size": args.sector_size})
